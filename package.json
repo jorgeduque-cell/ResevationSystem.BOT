@@ -1,0 +1,35 @@
+{
+  "name": "reservation-bot",
+  "version": "1.0.0",
+  "description": "Sistema autónomo de reservas IDRD - Reemplazo de n8n",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "start:dry": "node dist/index.js --dry-run",
+    "dev": "ts-node src/index.ts",
+    "dev:dry": "ts-node src/index.ts --dry-run",
+    "test": "jest --verbose",
+    "test:watch": "jest --watch"
+  },
+  "dependencies": {
+    "axios": "^1.7.0",
+    "axios-retry": "^4.4.0",
+    "dotenv": "^16.4.0",
+    "node-cron": "^3.0.3",
+    "node-telegram-bot-api": "^0.66.0",
+    "pino": "^9.0.0",
+    "pino-pretty": "^11.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/node-cron": "^3.0.11",
+    "@types/node-telegram-bot-api": "^0.64.0",
+    "jest": "^29.7.0",
+    "@types/jest": "^29.5.0",
+    "ts-jest": "^29.1.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.5.0"
+  }
+}

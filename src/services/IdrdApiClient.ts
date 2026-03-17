@@ -1,0 +1,154 @@
+// =========================================================
+// IDRD API CLIENT - HTTP client con retries para IDRD
+// =========================================================
+
+import axios, { AxiosInstance } from 'axios';
+import axiosRetry from 'axios-retry';
+import { IdrdLoginResponse, IdrdScheduleSlot, IdrdReservationResponse, PsePaymentResponse } from '../types';
+import { logger } from '../utils/logger';
+
+export class IdrdApiClient {
+  private citizenClient: AxiosInstance;
+  private contractorClient: AxiosInstance;
+
+  constructor(citizenBaseUrl: string, contractorBaseUrl: string) {
+    this.citizenClient = axios.create({
+      baseURL: citizenBaseUrl,
+      timeout: 30000,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    this.contractorClient = axios.create({
+      baseURL: contractorBaseUrl,
+      timeout: 30000,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    // Retry config: 3 attempts with exponential backoff
+    axiosRetry(this.citizenClient, {
+      retries: 3,
+      retryDelay: axiosRetry.exponentialDelay,
+      retryCondition: (error) => {
+        return axiosRetry.isNetworkOrIdempotentRequestError(error) ||
+               (error.response?.status !== undefined && error.response.status >= 500);
+      },
+      onRetry: (retryCount, error) => {
+        logger.warn({ retry: retryCount, error: error.message }, 'Reintentando petición IDRD (citizen)');
+      },
+    });
+
+    axiosRetry(this.contractorClient, {
+      retries: 3,
+      retryDelay: axiosRetry.exponentialDelay,
+      retryCondition: (error) => {
+        return axiosRetry.isNetworkOrIdempotentRequestError(error) ||
+               (error.response?.status !== undefined && error.response.status >= 500);
+      },
+      onRetry: (retryCount, error) => {
+        logger.warn({ retry: retryCount, error: error.message }, 'Reintentando petición IDRD (contractor)');
+      },
+    });
+  }
+
+  /**
+   * Login to IDRD portal → returns access_token
+   */
+  async login(email: string, password: string): Promise<IdrdLoginResponse> {
+    const response = await this.citizenClient.post<IdrdLoginResponse>('/login', {
+      email,
+      password,
+    });
+    return response.data;
+  }
+
+  /**
+   * Query park availability for a specific date
+   */
+  async getSchedules(parkId: number, date: string, document: string, token: string): Promise<IdrdScheduleSlot[]> {
+    const response = await this.citizenClient.get<{ data: IdrdScheduleSlot[] }>(
+      `/parks/schedules/${parkId}`,
+      {
+        params: { date, Documento: document },
+        headers: { Authorization: `Bearer ${token}` },
+      }
+    );
+    return response.data?.data || [];
+  }
+
+  /**
+   * Create reservation and initiate payment
+   */
+  async createReservation(
+    parkId: number,
+    date: string,
+    startHour: string,
+    endHour: string,
+    document: string,
+    token: string,
+  ): Promise<IdrdReservationResponse> {
+    const response = await this.citizenClient.post<IdrdReservationResponse>(
+      `/parks/schedules/${parkId}/payment`,
+      {
+        date,
+        start_hour: startHour,
+        final_hour: endHour,
+        payment_method: 'PSE',
+        bank_id: 1507,
+        person_type: 'N',
+        parkSelected: parkId,
+        document: String(document),
+      },
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    return response.data;
+  }
+
+  /**
+   * Generate PSE payment link via contractor portal
+   */
+  async generatePaymentLink(
+    reservationData: IdrdReservationResponse['data'],
+    token: string,
+    account: { name: string; document: string; email: string },
+  ): Promise<PsePaymentResponse> {
+    const nameParts = account.name.split(' ');
+    const firstName = nameParts[0] || 'N/A';
+    const lastName = nameParts.slice(1).join(' ') || 'N/A';
+
+    const response = await this.contractorClient.post<PsePaymentResponse>(
+      '/payment-gateway/transferBank',
+      {
+        reservationId: reservationData.booking_id,
+        totalPay: reservationData.amount,
+        concept: reservationData.concept,
+        BankTypeSelected: '1507',
+        permitTypeSelected: 'PO',
+        permitNumber: '999',
+        isTheSame: false,
+        name: reservationData.name || firstName,
+        lastName: reservationData.surname || lastName,
+        documentTypeSelected: 'CC',
+        document: reservationData.document || account.document,
+        email: reservationData.email || account.email,
+        phone: '3176357660',
+        address: 'CRA 90A 91 60',
+        typePersonSelected: 'N',
+        namePayer: 'NICOLAS',
+        lastNamePayer: 'SUAREZ VILLALBA',
+        documentTypeSelectedPayer: 'CC',
+        documentPayer: '1014275899',
+        emailPayer: 'nicolas.suarezv@hotmail.com',
+        phonePayer: '3176357660',
+        addressPayer: 'CRA 90A 91 60',
+        typePersonSelectedPayer: 'N',
+        parkSelected: reservationData.park_id,
+        serviceParkSelected: 15,
+        sport_id: null,
+        redirect_url: 'https://portalciudadano.idrd.gov.co/app/pagos/comprobante/',
+        ip_address: '179.13.168.147',
+      },
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    return response.data;
+  }
+}
