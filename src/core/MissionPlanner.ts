@@ -13,22 +13,25 @@ const TARGET_DAYS = [2, 3, 4, 5, 6, 1];
 export class MissionPlanner {
   private sanAndres: ParkConfig;
   private juanAmarillo: ParkConfig;
+  private florencia: ParkConfig;
 
-  constructor(sanAndres: ParkConfig, juanAmarillo: ParkConfig) {
+  constructor(sanAndres: ParkConfig, juanAmarillo: ParkConfig, florencia: ParkConfig) {
     this.sanAndres = sanAndres;
     this.juanAmarillo = juanAmarillo;
+    this.florencia = florencia;
   }
 
   /**
    * Generates missions for all accounts
-   * Accounts 1-6 → San Andrés
-   * Accounts 7-12 → Juan Amarillo
+   * Accounts 1-6   → San Andrés
+   * Accounts 7-12  → Juan Amarillo
+   * Accounts 13-18 → Florencia
    * Each gets a day from TARGET_DAYS in order
    */
   generateMissions(accounts: AccountConfig[], tokenMap: Map<number, string>): Mission[] {
     const missions: Mission[] = [];
 
-    for (let i = 0; i < accounts.length && i < 12; i++) {
+    for (let i = 0; i < accounts.length && i < 18; i++) {
       const account = accounts[i];
       const token = tokenMap.get(account.index);
 
@@ -43,10 +46,14 @@ export class MissionPlanner {
         // Group 1: Accounts 1-6 → San Andrés
         park = this.sanAndres;
         dayIndex = i;
-      } else {
+      } else if (i < 12) {
         // Group 2: Accounts 7-12 → Juan Amarillo
         park = this.juanAmarillo;
         dayIndex = i - 6;
+      } else {
+        // Group 3: Accounts 13-18 → Florencia
+        park = this.florencia;
+        dayIndex = i - 12;
       }
 
       const targetDayOfWeek = TARGET_DAYS[dayIndex];

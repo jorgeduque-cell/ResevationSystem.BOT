@@ -8,10 +8,11 @@ import { AccountConfig, ParkConfig } from '../src/types';
 describe('MissionPlanner', () => {
   const sanAndres: ParkConfig = { id: 15982, name: 'San Andrés' };
   const juanAmarillo: ParkConfig = { id: 15980, name: 'Juan Amarillo' };
-  const planner = new MissionPlanner(sanAndres, juanAmarillo);
+  const florencia: ParkConfig = { id: 1936, name: 'Florencia' };
+  const planner = new MissionPlanner(sanAndres, juanAmarillo, florencia);
 
-  // Generate 12 mock accounts
-  const accounts: AccountConfig[] = Array.from({ length: 12 }, (_, i) => ({
+  // Generate 18 mock accounts
+  const accounts: AccountConfig[] = Array.from({ length: 18 }, (_, i) => ({
     index: i + 1,
     name: `Account ${i + 1}`,
     document: `10000000${i + 1}`,
@@ -23,9 +24,9 @@ describe('MissionPlanner', () => {
   const tokenMap = new Map<number, string>();
   accounts.forEach((a) => tokenMap.set(a.index, `token-${a.index}`));
 
-  test('generates exactly 12 missions', () => {
+  test('generates exactly 18 missions', () => {
     const missions = planner.generateMissions(accounts, tokenMap);
-    expect(missions).toHaveLength(12);
+    expect(missions).toHaveLength(18);
   });
 
   test('assigns accounts 1-6 to San Andrés', () => {
@@ -44,23 +45,33 @@ describe('MissionPlanner', () => {
     }
   });
 
-  test('assigns unique dates to each mission', () => {
+  test('assigns accounts 13-18 to Florencia', () => {
     const missions = planner.generateMissions(accounts, tokenMap);
-    // Missions 1-6 should have same date pattern as 7-12
+    for (let i = 12; i < 18; i++) {
+      expect(missions[i].park.name).toBe('Florencia');
+      expect(missions[i].park.id).toBe(1936);
+    }
+  });
+
+  test('assigns unique dates to each mission within each park', () => {
+    const missions = planner.generateMissions(accounts, tokenMap);
+    // All three parks should have the same date pattern
     const sanAndresDates = missions.slice(0, 6).map((m) => m.targetDate);
     const juanAmarilloDates = missions.slice(6, 12).map((m) => m.targetDate);
+    const florenciaDates = missions.slice(12, 18).map((m) => m.targetDate);
 
-    // Corresponding bots for each park should have the same dates
     expect(sanAndresDates).toEqual(juanAmarilloDates);
+    expect(juanAmarilloDates).toEqual(florenciaDates);
   });
 
   test('skips accounts without tokens', () => {
     const partialTokenMap = new Map<number, string>();
     partialTokenMap.set(1, 'token-1');
     partialTokenMap.set(7, 'token-7');
+    partialTokenMap.set(13, 'token-13');
 
     const missions = planner.generateMissions(accounts, partialTokenMap);
-    expect(missions).toHaveLength(2);
+    expect(missions).toHaveLength(3);
   });
 
   test('mission IDs are sequential', () => {

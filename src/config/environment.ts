@@ -19,6 +19,7 @@ const envSchema = z.object({
   // Parks
   PARK_SAN_ANDRES_ID: z.string().transform(Number),
   PARK_JUAN_AMARILLO_ID: z.string().transform(Number),
+  PARK_FLORENCIA_ID: z.string().transform(Number),
 
   // IDRD URLs
   IDRD_CITIZEN_URL: z.string().url(),
@@ -35,7 +36,7 @@ const envSchema = z.object({
 function loadAccounts(): AccountConfig[] {
   const accounts: AccountConfig[] = [];
 
-  for (let i = 1; i <= 12; i++) {
+  for (let i = 1; i <= 18; i++) {
     const name = process.env[`ACCOUNT_${i}_NAME`];
     const document = process.env[`ACCOUNT_${i}_DOCUMENT`];
     const email = process.env[`ACCOUNT_${i}_EMAIL`];
@@ -60,6 +61,7 @@ export function loadConfig(): AppConfig {
     parks: {
       sanAndres: { id: env.PARK_SAN_ANDRES_ID, name: 'San Andrés' },
       juanAmarillo: { id: env.PARK_JUAN_AMARILLO_ID, name: 'Juan Amarillo' },
+      florencia: { id: env.PARK_FLORENCIA_ID, name: 'Florencia' },
     },
     telegram: {
       bot901: {

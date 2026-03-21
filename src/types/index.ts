@@ -126,6 +126,7 @@ export interface AppConfig {
   parks: {
     sanAndres: ParkConfig;
     juanAmarillo: ParkConfig;
+    florencia: ParkConfig;
   };
   telegram: {
     bot901: TelegramTarget;

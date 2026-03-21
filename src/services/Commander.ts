@@ -41,8 +41,8 @@ export class Commander {
   /**
    * Full execution cycle:
    * 1. Login all accounts → refresh tokens
-   * 2. Generate 12 missions (6 San Andrés + 6 Juan Amarillo)
-   * 3. Launch 12 SoldierBots in parallel
+   * 2. Generate 18 missions (6 San Andrés + 6 Juan Amarillo + 6 Florencia)
+   * 3. Launch 18 SoldierBots in parallel
    * 4. Wait for all to finish (either completed or stopped at 1PM)
    * 5. Report results via Telegram
    */
@@ -66,6 +66,7 @@ export class Commander {
     const planner = new MissionPlanner(
       this.config.parks.sanAndres,
       this.config.parks.juanAmarillo,
+      this.config.parks.florencia,
     );
 
     const missions = planner.generateMissions(this.config.accounts, tokenMap);

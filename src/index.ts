@@ -51,7 +51,7 @@ function setupTelegramCommands(config: AppConfig): void {
   const bot = new TelegramBot(config.telegram.botInv.botToken, { polling: true });
 
   logger.info('📱 Telegram Bot activo. Comandos disponibles:');
-  logger.info('   /empieza  → Activa los 12 bots ahora');
+  logger.info('   /empieza  → Activa los 18 bots ahora');
   logger.info('   /termina  → Detiene los bots');
   logger.info('   /estado   → Muestra el estado del sistema');
 
@@ -70,7 +70,7 @@ function setupTelegramCommands(config: AppConfig): void {
       return;
     }
 
-    await bot.sendMessage(chatId, '🚀 ¡Activando 12 bots en paralelo! Te notificaré cuando encuentren disponibilidad.');
+    await bot.sendMessage(chatId, '🚀 ¡Activando 18 bots en paralelo! Te notificaré cuando encuentren disponibilidad.');
     logger.info(`📱 Comando /empieza recibido de usuario ${userId}`);
 
     // Run in background (don't await - let Telegram respond immediately)
