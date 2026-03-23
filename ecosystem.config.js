@@ -11,8 +11,9 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
       },
-      // Restart at 8:55 AM every day to ensure fresh process
-      cron_restart: '55 8 * * *',
+      // Limit restarts to prevent infinite loops
+      max_restarts: 5,
+      restart_delay: 5000,
       // Log configuration
       error_file: './logs/error.log',
       out_file: './logs/output.log',

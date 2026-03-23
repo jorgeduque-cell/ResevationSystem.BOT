@@ -103,7 +103,7 @@ export interface TelegramTarget {
 }
 
 /** Bot execution status */
-export type BotStatus = 'idle' | 'searching' | 'found' | 'reserved' | 'completed' | 'stopped' | 'error';
+export type BotStatus = 'idle' | 'searching' | 'found' | 'reserved' | 'completed' | 'stopped' | 'aborted' | 'error';
 
 /** SoldierBot execution result */
 export interface BotExecutionResult {

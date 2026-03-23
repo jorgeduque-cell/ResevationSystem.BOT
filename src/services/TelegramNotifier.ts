@@ -6,6 +6,9 @@ import TelegramBot from 'node-telegram-bot-api';
 import { TelegramTarget } from '../types';
 import { logger } from '../utils/logger';
 
+const RETRY_DELAY_MS = 2000;
+const MAX_RETRIES = 1;
+
 export class TelegramNotifier {
   private bots: Map<string, TelegramBot> = new Map();
 
@@ -44,27 +47,65 @@ export class TelegramNotifier {
   }
 
   /**
-   * Sends a message to ALL configured targets
+   * Sends a message to ALL configured targets with retry
    */
   private async sendToAll(text: string): Promise<void> {
     const promises = this.targets.map(async (target) => {
-      try {
-        const bot = this.bots.get(target.botToken);
-        if (!bot) {
-          logger.error({ chatId: target.chatId }, 'Bot de Telegram no encontrado');
-          return;
-        }
-        await bot.sendMessage(target.chatId, text);
-        logger.info({ chatId: target.chatId }, 'Mensaje de Telegram enviado');
-      } catch (error: any) {
-        logger.error(
-          { chatId: target.chatId, error: error.message },
-          'Error enviando mensaje de Telegram'
-        );
-      }
+      await this.sendWithRetry(target, text);
     });
 
     await Promise.allSettled(promises);
+  }
+
+  /**
+   * Sends a message to a single target, retrying once on transient errors
+   */
+  private async sendWithRetry(target: TelegramTarget, text: string): Promise<void> {
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const bot = this.bots.get(target.botToken);
+        if (!bot) {
+          logger.error(
+            { chatId: target.chatId, botToken: target.botToken.slice(0, 10) + '...' },
+            '❌ Bot de Telegram no encontrado para este token',
+          );
+          return;
+        }
+
+        await bot.sendMessage(target.chatId, text);
+        logger.info({ chatId: target.chatId }, '✅ Mensaje de Telegram enviado');
+        return; // Success — exit retry loop
+      } catch (error: any) {
+        const statusCode = error?.response?.statusCode || error?.response?.status || 'unknown';
+        const errorBody = error?.response?.body?.description || error?.message || 'unknown error';
+
+        logger.error(
+          {
+            chatId: target.chatId,
+            botToken: target.botToken.slice(0, 10) + '...',
+            statusCode,
+            error: errorBody,
+            attempt: attempt + 1,
+          },
+          `❌ Error enviando mensaje de Telegram (intento ${attempt + 1}/${MAX_RETRIES + 1})`,
+        );
+
+        // Don't retry on permanent errors (403 = bot blocked, 400 = bad request)
+        if (statusCode === 403 || statusCode === 400) {
+          logger.warn(
+            { chatId: target.chatId, statusCode },
+            '⚠️ Error permanente — el usuario debe enviar /start al bot o verificar el chatId',
+          );
+          return;
+        }
+
+        // Retry on transient errors
+        if (attempt < MAX_RETRIES) {
+          logger.info({ chatId: target.chatId }, `🔄 Reintentando en ${RETRY_DELAY_MS}ms...`);
+          await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+        }
+      }
+    }
   }
 
   /**

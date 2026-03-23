@@ -1,7 +1,7 @@
 // =========================================================
 // COMMANDER - Orquestador paralelo
 // Reemplazo del workflow "Comandante"
-// Lanza 12 SoldierBots en paralelo
+// Lanza 18 SoldierBots en paralelo
 // =========================================================
 
 import { AppConfig, BotExecutionResult } from '../types';
@@ -43,13 +43,19 @@ export class Commander {
    * 1. Login all accounts → refresh tokens
    * 2. Generate 18 missions (6 San Andrés + 6 Juan Amarillo + 6 Florencia)
    * 3. Launch 18 SoldierBots in parallel
-   * 4. Wait for all to finish (either completed or stopped at 1PM)
+   * 4. Wait for all to finish (either completed, stopped, or aborted)
    * 5. Report results via Telegram
    */
-  async deploy(): Promise<BotExecutionResult[]> {
+  async deploy(signal?: AbortSignal): Promise<BotExecutionResult[]> {
     logger.info('='.repeat(60));
     logger.info('🎖️  COMANDANTE ACTIVADO - Iniciando despliegue');
     logger.info('='.repeat(60));
+
+    // === CHECK ABORT before starting ===
+    if (signal?.aborted) {
+      logger.info('🛑 Señal de aborto recibida antes de iniciar. Cancelando despliegue.');
+      return [];
+    }
 
     // === PHASE 1: Token refresh ===
     logger.info('📡 Fase 1: Refrescando tokens de todas las cuentas...');
@@ -58,6 +64,12 @@ export class Commander {
     if (tokenMap.size === 0) {
       logger.error('❌ No se obtuvo ningún token. Abortando.');
       await this.telegram.notifyBotStatus('❌ COMANDANTE: No se pudo hacer login a ninguna cuenta. Abortando misión.');
+      return [];
+    }
+
+    // === CHECK ABORT after token refresh ===
+    if (signal?.aborted) {
+      logger.info('🛑 Señal de aborto recibida después de token refresh. Cancelando despliegue.');
       return [];
     }
 
@@ -108,11 +120,13 @@ export class Commander {
 
     // Launch ALL bots simultaneously with Promise.allSettled
     // Each bot runs independently — if one fails, the others continue
+    // Pass the AbortSignal so /termina can stop all bots
     const botPromises = missions.map((mission) =>
       soldierBot.execute(
         mission,
         this.config.schedule.botStartHour,
         this.config.schedule.botStopHour,
+        signal,
       )
     );
 
@@ -132,15 +146,16 @@ export class Commander {
     // Summary
     const completed = executionResults.filter((r) => r.reservationMade).length;
     const stopped = executionResults.filter((r) => r.status === 'stopped').length;
+    const aborted = executionResults.filter((r) => r.status === 'aborted').length;
     const errors = executionResults.filter((r) => r.status === 'error').length;
 
     logger.info('='.repeat(60));
-    logger.info(`📊 RESUMEN: ${completed} reservadas | ${stopped} sin espacio | ${errors} errores`);
+    logger.info(`📊 RESUMEN: ${completed} reservadas | ${stopped} sin espacio | ${aborted} abortados | ${errors} errores`);
     logger.info('='.repeat(60));
 
     // Final Telegram report
     const reportLines = executionResults.map((r) => {
-      const emoji = r.reservationMade ? '✅' : r.status === 'stopped' ? '⏰' : '❌';
+      const emoji = r.reservationMade ? '✅' : r.status === 'stopped' ? '⏰' : r.status === 'aborted' ? '🛑' : '❌';
       return `${emoji} ${r.missionId}: ${r.account} → ${r.park} (${r.targetDate}) [${r.slotsChecked} intentos]`;
     });
 
@@ -148,6 +163,7 @@ export class Commander {
       `📊 REPORTE FINAL\n` +
       `✅ Reservadas: ${completed}\n` +
       `⏰ Sin espacio: ${stopped}\n` +
+      `🛑 Abortados: ${aborted}\n` +
       `❌ Errores: ${errors}\n\n` +
       reportLines.join('\n')
     );

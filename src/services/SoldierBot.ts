@@ -1,7 +1,7 @@
 // =========================================================
 // SOLDIER BOT - Reemplazo de "Soldados bots"
 // Loop continuo: buscar → reservar → notificar
-// Corre de 9AM a 1PM sin límite de intentos
+// Respeta señal de aborto y tiene circuit breaker
 // =========================================================
 
 import { Mission, BotExecutionResult, BotStatus } from '../types';
@@ -12,6 +12,9 @@ import { TokenManager } from './TokenManager';
 import { extractPaymentLink, extractPaymentId } from './PaymentService';
 import { createBotLogger } from '../utils/logger';
 import { isWithinOperatingHours, sleepWithJitter, nowBogota } from '../utils/date';
+
+const MAX_CONSECUTIVE_ERRORS = 10;
+const CIRCUIT_BREAKER_PAUSE_MS = 60_000; // 60 seconds
 
 export class SoldierBot {
   private apiClient: IdrdApiClient;
@@ -37,17 +40,21 @@ export class SoldierBot {
   /**
    * Executes a mission in a continuous loop until:
    * - Slot is found and reserved → exits with 'completed'
-   * - Operating hours end (1PM) → exits with 'stopped'
+   * - Operating hours end → exits with 'stopped'
+   * - AbortSignal fires → exits with 'aborted'
+   * - Circuit breaker trips after too many consecutive errors
    */
   async execute(
     mission: Mission,
     botStartHour: number,
     botStopHour: number,
+    signal?: AbortSignal,
   ): Promise<BotExecutionResult> {
     const log = createBotLogger(mission.missionId, mission.park.name);
     const startedAt = new Date().toISOString();
     let status: BotStatus = 'searching';
     let slotsChecked = 0;
+    let consecutiveErrors = 0;
     let paymentLink: string | undefined;
     let errorMsg: string | undefined;
 
@@ -56,9 +63,16 @@ export class SoldierBot {
     );
 
     // ============================
-    // MAIN LOOP: 9AM → 1PM
+    // MAIN LOOP
     // ============================
     while (isWithinOperatingHours(botStartHour, botStopHour)) {
+      // === CHECK ABORT SIGNAL ===
+      if (signal?.aborted) {
+        status = 'aborted';
+        log.info(`🛑 ${mission.missionId} - Señal de aborto recibida. Deteniendo bot.`);
+        break;
+      }
+
       try {
         // 1. Consultar disponibilidad
         log.info(`Consultando disponibilidad para ${mission.targetDate}...`);
@@ -71,6 +85,7 @@ export class SoldierBot {
         );
 
         slotsChecked++;
+        consecutiveErrors = 0; // Reset on success
 
         // 2. Pasar al AvailabilityEngine (Tetris)
         const result = this.availabilityEngine.findSlot(schedules, mission.targetDate);
@@ -158,7 +173,8 @@ export class SoldierBot {
         }
       } catch (error: any) {
         slotsChecked++;
-        log.error({ error: error.message }, `Error en intento #${slotsChecked}`);
+        consecutiveErrors++;
+        log.error({ error: error.message, consecutiveErrors }, `Error en intento #${slotsChecked}`);
 
         // If it's a 401, try to refresh the token
         if (error?.response?.status === 401) {
@@ -166,12 +182,30 @@ export class SoldierBot {
           try {
             mission.token = await this.tokenManager.refreshSingleToken(mission.account);
             log.info('Token refrescado exitosamente');
+            consecutiveErrors = 0; // Token refreshed, reset counter
           } catch {
             log.error('No se pudo refrescar el token');
           }
         }
 
-        await sleepWithJitter(2000, 5000);
+        // === CIRCUIT BREAKER ===
+        if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+          log.warn(
+            `⚡ Circuit breaker: ${consecutiveErrors} errores consecutivos. Pausando ${CIRCUIT_BREAKER_PAUSE_MS / 1000}s...`
+          );
+          await sleepWithJitter(CIRCUIT_BREAKER_PAUSE_MS, CIRCUIT_BREAKER_PAUSE_MS + 5000);
+          consecutiveErrors = 0; // Reset after pause
+
+          // Try a fresh token after circuit breaker pause
+          try {
+            mission.token = await this.tokenManager.refreshSingleToken(mission.account);
+            log.info('Token refrescado después de pausa del circuit breaker');
+          } catch {
+            log.error('No se pudo refrescar el token después del circuit breaker');
+          }
+        } else {
+          await sleepWithJitter(2000, 5000);
+        }
       }
     }
 

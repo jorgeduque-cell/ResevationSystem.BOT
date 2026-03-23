@@ -37,7 +37,7 @@ async function runDeployment(config: AppConfig): Promise<void> {
 
   try {
     const commander = new Commander(config, isDryRun);
-    await commander.deploy();
+    await commander.deploy(activeAbortController.signal);
   } catch (error: any) {
     logger.error({ error: error.message }, '❌ Error en ejecución del Commander');
   } finally {
@@ -96,18 +96,14 @@ function setupTelegramCommands(config: AppConfig): void {
 
     logger.info(`📱 Comando /termina recibido de usuario ${userId}`);
 
-    // Signal abort and force stop
+    // Signal abort to stop the running deployment gracefully
+    // The finally block in runDeployment will reset isRunning and activeAbortController
     if (activeAbortController) {
       activeAbortController.abort();
     }
 
-    // Force exit the current execution by terminating the process and restarting
-    // PM2 will auto-restart the process
-    await bot.sendMessage(chatId, '🛑 Deteniendo bots... El sistema se reiniciará en modo espera.');
-    
-    setTimeout(() => {
-      process.exit(0); // PM2 will restart, cron will be re-scheduled
-    }, 1000);
+    await bot.sendMessage(chatId, '🛑 Señal de parada enviada. Los bots se detendrán en segundos.\nUsa /empieza para activarlos de nuevo.');
+    logger.info('🛑 Señal de aborto enviada por comando /termina. Esperando que los bots terminen.');
   });
 
   // === /estado ===
@@ -179,6 +175,10 @@ async function main() {
   cron.schedule(
     cronExpression,
     async () => {
+      if (isRunning) {
+        logger.warn('⏰ Cron disparado pero ya hay una ejecución en curso. Ignorando.');
+        return;
+      }
       logger.info(`⏰ Cron disparado: ${nowBogota().toISOString()}`);
       await runDeployment(config);
     },
