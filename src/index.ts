@@ -1,9 +1,8 @@
 // =========================================================
 // INDEX.TS - Entry point del Bot de Reservas IDRD
-// Cron diario + Control por Telegram (/empieza, /termina)
+// Control 100% manual por Telegram (/empieza, /termina)
 // =========================================================
 
-import cron from 'node-cron';
 import TelegramBot from 'node-telegram-bot-api';
 import { loadConfig } from './config/environment';
 import { Commander } from './services/Commander';
@@ -14,7 +13,6 @@ import { AppConfig } from './types';
 // Parse CLI flags
 const args = process.argv.slice(2);
 const isDryRun = args.includes('--dry-run');
-const runNow = args.includes('--now');
 
 // Authorized Telegram user IDs (only these can control the bot)
 const AUTHORIZED_USERS = new Set<number>([
@@ -161,30 +159,6 @@ async function main() {
   // === TELEGRAM COMMAND LISTENER (always active) ===
   setupTelegramCommands(config);
 
-  // If --now flag, execute immediately AND keep listening
-  if (runNow) {
-    logger.info('🚀 Flag --now detectado. Ejecutando AHORA...');
-    runDeployment(config);
-    // Don't return - keep the process alive for Telegram commands
-  }
-
-  // === CRON JOB (always active) ===
-  const cronExpression = '0 9 * * 1'; // 9:00 AM every Monday
-  logger.info(`⏰ Cron programado: "${cronExpression}" (Lunes a las 9:00 AM Bogotá)`);
-
-  cron.schedule(
-    cronExpression,
-    async () => {
-      if (isRunning) {
-        logger.warn('⏰ Cron disparado pero ya hay una ejecución en curso. Ignorando.');
-        return;
-      }
-      logger.info(`⏰ Cron disparado: ${nowBogota().toISOString()}`);
-      await runDeployment(config);
-    },
-    { timezone: 'America/Bogota' }
-  );
-
   // Graceful shutdown
   process.on('SIGINT', () => {
     logger.info('🛑 SIGINT recibido. Deteniendo sistema...');
@@ -196,8 +170,8 @@ async function main() {
     process.exit(0);
   });
 
-  logger.info('🟢 Sistema activo. Cron + Telegram escuchando.');
-  logger.info('📱 Envía /empieza desde Telegram para activar los bots manualmente.');
+  logger.info('🟢 Sistema activo. Telegram escuchando.');
+  logger.info('📱 Envía /empieza desde Telegram para activar los bots.');
 }
 
 main().catch((error) => {

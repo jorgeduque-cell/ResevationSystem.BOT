@@ -121,11 +121,12 @@ export class Commander {
     // Launch ALL bots simultaneously with Promise.allSettled
     // Each bot runs independently — if one fails, the others continue
     // Pass the AbortSignal so /termina can stop all bots
+    // Hours set to 0-24 = run continuously, only stop via /termina or completion
     const botPromises = missions.map((mission) =>
       soldierBot.execute(
         mission,
-        this.config.schedule.botStartHour,
-        this.config.schedule.botStopHour,
+        0,  // No start hour restriction
+        24, // No stop hour restriction — runs until /termina
         signal,
       )
     );
