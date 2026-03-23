@@ -145,24 +145,26 @@ export class Commander {
     }
 
     // Summary
-    const completed = executionResults.filter((r) => r.reservationMade).length;
+    const totalReservations = executionResults.reduce((sum, r) => sum + r.reservationCount, 0);
+    const botsWithReservations = executionResults.filter((r) => r.reservationMade).length;
     const stopped = executionResults.filter((r) => r.status === 'stopped').length;
     const aborted = executionResults.filter((r) => r.status === 'aborted').length;
     const errors = executionResults.filter((r) => r.status === 'error').length;
 
     logger.info('='.repeat(60));
-    logger.info(`📊 RESUMEN: ${completed} reservadas | ${stopped} sin espacio | ${aborted} abortados | ${errors} errores`);
+    logger.info(`📊 RESUMEN: ${totalReservations} reservas (por ${botsWithReservations} bots) | ${stopped} sin espacio | ${aborted} abortados | ${errors} errores`);
     logger.info('='.repeat(60));
 
     // Final Telegram report
     const reportLines = executionResults.map((r) => {
       const emoji = r.reservationMade ? '✅' : r.status === 'stopped' ? '⏰' : r.status === 'aborted' ? '🛑' : '❌';
-      return `${emoji} ${r.missionId}: ${r.account} → ${r.park} (${r.targetDate}) [${r.slotsChecked} intentos]`;
+      const countLabel = r.reservationCount > 0 ? ` [${r.reservationCount} reservas]` : '';
+      return `${emoji} ${r.missionId}: ${r.account} → ${r.park} (${r.targetDate}) [${r.slotsChecked} intentos]${countLabel}`;
     });
 
     await this.telegram.notifyBotStatus(
       `📊 REPORTE FINAL\n` +
-      `✅ Reservadas: ${completed}\n` +
+      `✅ Total reservas: ${totalReservations} (por ${botsWithReservations} bots)\n` +
       `⏰ Sin espacio: ${stopped}\n` +
       `🛑 Abortados: ${aborted}\n` +
       `❌ Errores: ${errors}\n\n` +

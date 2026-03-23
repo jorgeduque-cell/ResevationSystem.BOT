@@ -114,7 +114,9 @@ export interface BotExecutionResult {
   targetDate: string;
   slotsChecked: number;
   reservationMade: boolean;
+  reservationCount: number;
   paymentLink?: string;
+  paymentLinks: string[];
   error?: string;
   startedAt: string;
   finishedAt: string;

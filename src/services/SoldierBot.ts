@@ -55,7 +55,9 @@ export class SoldierBot {
     let status: BotStatus = 'searching';
     let slotsChecked = 0;
     let consecutiveErrors = 0;
+    let reservationCount = 0;
     let paymentLink: string | undefined;
+    const paymentLinks: string[] = [];
     let errorMsg: string | undefined;
 
     log.info(
@@ -104,9 +106,10 @@ export class SoldierBot {
         );
 
         if (this.isDryRun) {
-          log.info('🧪 DRY RUN - No se realizará la reserva');
-          status = 'found';
-          break;
+          reservationCount++;
+          log.info(`🧪 DRY RUN - Slot #${reservationCount} encontrado. Continuando búsqueda...`);
+          await sleepWithJitter(3000, 5000);
+          continue;
         }
 
         // 3a. Login JIT (token fresco para la reserva)
@@ -163,9 +166,10 @@ export class SoldierBot {
             paymentLink!,
           );
 
-          status = 'completed';
-          log.info(`🏆 ${mission.missionId} COMPLETADA EXITOSAMENTE`);
-          break;
+          reservationCount++;
+          paymentLinks.push(paymentLink!);
+          log.info(`🏆 ${mission.missionId} RESERVA #${reservationCount} EXITOSA. Continuando búsqueda...`);
+          await sleepWithJitter(3000, 5000);
         } else {
           log.warn({ code: reservation.code }, 'Reserva devolvió código != 200, reintentando...');
           await sleepWithJitter(1500, 3000);
@@ -222,8 +226,10 @@ export class SoldierBot {
       park: mission.park.name,
       targetDate: mission.targetDate,
       slotsChecked,
-      reservationMade: status === 'completed',
+      reservationMade: reservationCount > 0,
+      reservationCount,
       paymentLink,
+      paymentLinks,
       error: errorMsg,
       startedAt,
       finishedAt: new Date().toISOString(),
