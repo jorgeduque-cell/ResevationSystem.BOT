@@ -50,7 +50,7 @@ export class SoldierBot {
     botStopHour: number,
     signal?: AbortSignal,
   ): Promise<BotExecutionResult> {
-    const log = createBotLogger(mission.missionId, mission.park.name);
+    const log = createBotLogger(mission.missionId, `${mission.court.parkName}/${mission.court.courtName}`);
     const startedAt = new Date().toISOString();
     let status: BotStatus = 'searching';
     let slotsChecked = 0;
@@ -61,7 +61,7 @@ export class SoldierBot {
     let errorMsg: string | undefined;
 
     log.info(
-      `🪖 ${mission.missionId} ACTIVADO - ${mission.account.name} → ${mission.park.name} (${mission.targetDate})`
+      `🪖 ${mission.missionId} ACTIVADO - ${mission.account.name} → ${mission.court.parkName}/${mission.court.courtName} (ID ${mission.targetCourtId}) fecha ${mission.targetDate}`
     );
 
     // ============================
@@ -80,7 +80,7 @@ export class SoldierBot {
         log.info(`Consultando disponibilidad para ${mission.targetDate}...`);
 
         const schedules = await this.apiClient.getSchedules(
-          mission.park.id,
+          mission.court.parkId,
           mission.targetDate,
           mission.account.document,
           mission.token,
@@ -89,11 +89,35 @@ export class SoldierBot {
         slotsChecked++;
         consecutiveErrors = 0; // Reset on success
 
+        // On the first attempt always dump a sample of the raw response so the
+        // operator can verify field names / shape without needing env vars.
+        if (slotsChecked === 1) {
+          const sampleForDate = schedules.filter((s) => s.start?.startsWith(mission.targetDate));
+          const uniqueDates = Array.from(
+            new Set(schedules.map((s) => s.start?.slice(0, 10)).filter(Boolean)),
+          ).sort();
+          log.info(
+            {
+              totalSlots: schedules.length,
+              targetDate: mission.targetDate,
+              slotsForTargetDate: sampleForDate.length,
+              datesReturnedByIdrd: uniqueDates,
+              sampleKeys: schedules[0] ? Object.keys(schedules[0]) : [],
+              first3Any: schedules.slice(0, 3),
+            },
+            '🔍 Muestra de slots crudos IDRD (primer intento)',
+          );
+        }
+
         // 2. Pasar al AvailabilityEngine (Tetris)
+        // El endpoint ya retorna solo la cancha objetivo — no hace falta filtrar
         const result = this.availabilityEngine.findSlot(schedules, mission.targetDate);
 
         if (!result.found) {
-          log.debug(`Intento #${slotsChecked}: ${result.debugInfo}`);
+          // Log diagnosis every 10 attempts to keep logs readable
+          if (slotsChecked === 1 || slotsChecked % 10 === 0) {
+            log.info(`Intento #${slotsChecked} sin hueco → ${result.debugInfo}`);
+          }
           await sleepWithJitter(1500, 3000);
           continue;
         }
@@ -125,7 +149,7 @@ export class SoldierBot {
         // 3b. Crear reserva
         log.info('Creando reserva...');
         const reservation = await this.apiClient.createReservation(
-          mission.park.id,
+          mission.court.parkId,
           mission.targetDate,
           result.startHourFormatted!,
           result.endHourFormatted!,
@@ -157,14 +181,18 @@ export class SoldierBot {
             paymentLink = 'https://portalciudadano.idrd.gov.co/app/pagos';
           }
 
-          // 3e. Notificar por Telegram
-          const concept = reservation.data?.concept || `${mission.park.name} - ${result.startHourFormatted} a ${result.endHourFormatted}`;
-          await this.telegram.notifyReservationSuccess(
-            `${mission.account.name}`,
-            mission.park.name,
-            concept,
-            paymentLink!,
-          );
+          // 3e. Notificar por Telegram (rich format, spec-compliant)
+          const price = reservation.data?.amount ?? result.price;
+          await this.telegram.notifyCourtFound({
+            userName: mission.account.name,
+            courtName: mission.court.courtName,
+            courtId: mission.targetCourtId,
+            parkName: mission.court.parkName,
+            date: mission.targetDate,
+            timeSlot: `${result.startHourFormatted} - ${result.endHourFormatted}`,
+            price,
+            paymentLink: paymentLink!,
+          });
 
           reservationCount++;
           paymentLinks.push(paymentLink!);
@@ -178,7 +206,17 @@ export class SoldierBot {
       } catch (error: any) {
         slotsChecked++;
         consecutiveErrors++;
-        log.error({ error: error.message, consecutiveErrors }, `Error en intento #${slotsChecked}`);
+        log.error(
+          {
+            error: error.message,
+            consecutiveErrors,
+            httpStatus: error?.response?.status,
+            apiResponse: error?.response?.data,
+            requestUrl: error?.config?.url,
+            requestPayload: error?.config?.data,
+          },
+          `Error en intento #${slotsChecked}`,
+        );
 
         // If it's a 401, try to refresh the token
         if (error?.response?.status === 401) {
@@ -223,7 +261,9 @@ export class SoldierBot {
       missionId: mission.missionId,
       status,
       account: mission.account.name,
-      park: mission.park.name,
+      park: mission.court.parkName,
+      courtId: mission.targetCourtId,
+      courtName: mission.court.courtName,
       targetDate: mission.targetDate,
       slotsChecked,
       reservationMade: reservationCount > 0,

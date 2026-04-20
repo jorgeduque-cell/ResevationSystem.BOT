@@ -16,10 +16,6 @@ const envSchema = z.object({
   TELEGRAM_CHAT_ADMIN: z.string().min(1),
   TELEGRAM_CHAT_NICOLAS: z.string().min(1),
 
-  // Parks
-  PARK_SAN_ANDRES_ID: z.string().transform(Number),
-  PARK_JUAN_AMARILLO_ID: z.string().transform(Number),
-  PARK_FLORENCIA_ID: z.string().transform(Number),
 
   // IDRD URLs
   IDRD_CITIZEN_URL: z.string().url(),
@@ -58,11 +54,6 @@ export function loadConfig(): AppConfig {
 
   return {
     accounts,
-    parks: {
-      sanAndres: { id: env.PARK_SAN_ANDRES_ID, name: 'San Andrés' },
-      juanAmarillo: { id: env.PARK_JUAN_AMARILLO_ID, name: 'Juan Amarillo' },
-      florencia: { id: env.PARK_FLORENCIA_ID, name: 'Florencia' },
-    },
     telegram: {
       bot901: {
         botToken: env.TELEGRAM_BOT_TOKEN_901,

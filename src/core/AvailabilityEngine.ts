@@ -4,7 +4,8 @@
 // =========================================================
 
 import { IdrdScheduleSlot, SlotResult } from '../types';
-import { formatHourPhp } from '../utils/date';
+import { formatHourPhp, toIsoDate } from '../utils/date';
+import { extractCourtId } from '../services/CourtCatalog';
 
 interface AvailabilityConfig {
   slotStartHour: number;  // 20 (8PM)
@@ -33,11 +34,22 @@ export class AvailabilityEngine {
    * @param targetDate YYYY-MM-DD format
    * @returns SlotResult with found status and slot details
    */
-  findSlot(slots: IdrdScheduleSlot[], targetDate: string): SlotResult {
-    // 1. Map obstacles (non-available slots)
+  findSlot(slots: IdrdScheduleSlot[], targetDate: string, targetCourtId?: string): SlotResult {
+    // Pre-filter by court if specified — a park's schedule mixes many courts
+    const courtSlots = targetCourtId
+      ? slots.filter((s) => extractCourtId(s) === targetCourtId)
+      : slots;
+
+    // Defensive truthy check — IDRD has shipped `can` as both boolean and
+    // stringified booleans across endpoints. Treat anything that equals true,
+    // "true" or 1 as reservable.
+    const isAvailable = (v: unknown): boolean => v === true || v === 'true' || v === 1 || v === '1';
+    const isBlocked = (v: unknown): boolean => v === false || v === 'false' || v === 0 || v === '0';
+
+    // 1. Map obstacles — slots explicitly marked as NOT bookable
     const obstacles: Obstacle[] = [];
-    slots.forEach((slot) => {
-      if (slot.can === false || slot.category !== 'Disponible') {
+    courtSlots.forEach((slot) => {
+      if (isBlocked(slot.can)) {
         obstacles.push({
           start: new Date(slot.start).getTime(),
           end: new Date(slot.end).getTime(),
@@ -46,14 +58,8 @@ export class AvailabilityEngine {
     });
 
     // 2. Filter available blocks for the target date
-    const availableBlocks = slots.filter((slot) => {
-      if (!slot.start) return false;
-      return (
-        slot.category === 'Disponible' &&
-        slot.can === true &&
-        slot.start.startsWith(targetDate)
-      );
-    });
+    const slotsForDate = courtSlots.filter((s) => s.start?.startsWith(targetDate));
+    const availableBlocks = slotsForDate.filter((slot) => isAvailable(slot.can));
 
     // 3. Tetris algorithm: try to fit durations in priority order
     const nowMs = Date.now();
@@ -109,20 +115,46 @@ export class AvailabilityEngine {
 
     // 4. Build result
     if (candidateStart && candidateEnd) {
+      // Find the block we landed in to recover its court/price metadata
+      const matchedBlock = availableBlocks.find((b) => {
+        const s = new Date(b.start).getTime();
+        const e = new Date(b.end).getTime();
+        return candidateStart!.getTime() >= s && candidateEnd!.getTime() <= e;
+      });
       return {
         found: true,
         debugInfo: '¡Cancha encontrada!',
         startTime: candidateStart,
         endTime: candidateEnd,
-        dateFormatted: candidateStart.toISOString().split('T')[0],
+        dateFormatted: toIsoDate(candidateStart),
         startHourFormatted: formatHourPhp(candidateStart),
         endHourFormatted: formatHourPhp(candidateEnd),
+        matchedCourtId: matchedBlock ? extractCourtId(matchedBlock) : targetCourtId,
+        price: matchedBlock?.price ?? matchedBlock?.amount,
       };
     }
 
+    // Rich diagnostic: why didn't we find anything?
+    const nowMs2 = Date.now();
+    const inWindow = availableBlocks.filter((b) => {
+      const sh = new Date(b.start).getHours();
+      const eh = new Date(b.end).getHours();
+      return sh >= this.config.slotStartHour &&
+        ((eh <= this.config.slotEndHour && eh !== 0) || (eh === 0 && this.config.slotEndHour >= 22));
+    });
+    const meetAnticipation = availableBlocks.filter(
+      (b) => (new Date(b.start).getTime() - nowMs2) / 3600000 >= this.config.minAnticipationHours,
+    );
+
     return {
       found: false,
-      debugInfo: `No hay huecos para ${targetDate} en rango ${this.config.slotStartHour}:00-${this.config.slotEndHour}:00`,
+      debugInfo:
+        `date=${targetDate} ` +
+        `slots_total=${slots.length} ` +
+        `slots_date=${slotsForDate.length} ` +
+        `available=${availableBlocks.length} ` +
+        `in_window_${this.config.slotStartHour}-${this.config.slotEndHour}=${inWindow.length} ` +
+        `meets_anticipation_${this.config.minAnticipationHours}h=${meetAnticipation.length}`,
     };
   }
 }

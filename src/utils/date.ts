@@ -29,10 +29,13 @@ export function formatHourPhp(date: Date): string {
 }
 
 /**
- * Returns the ISO date string (YYYY-MM-DD) for a given Date
+ * Returns YYYY-MM-DD for a given Date *in Bogotá local time*.
+ * MUST NOT use toISOString() — that emits UTC, which silently shifts the
+ * date forward when the bot runs after 7 PM Bogotá (UTC-5).
  */
 export function toIsoDate(date: Date): string {
-  return date.toISOString().split('T')[0];
+  // en-CA's locale format is natively YYYY-MM-DD
+  return date.toLocaleDateString('en-CA', { timeZone: TIMEZONE });
 }
 
 /**

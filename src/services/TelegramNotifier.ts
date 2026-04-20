@@ -21,20 +21,31 @@ export class TelegramNotifier {
   }
 
   /**
-   * Sends a reservation success notification to ALL configured chats
+   * Rich "court found" notification (spec-format).
    */
-  async notifyReservationSuccess(
-    userName: string,
-    parkName: string,
-    concept: string,
-    paymentLink: string,
-  ): Promise<void> {
+  async notifyCourtFound(opts: {
+    userName: string;
+    courtName: string;
+    courtId: string;
+    parkName: string;
+    date: string;
+    timeSlot: string;        // "8:00 PM - 10:00 PM"
+    price?: number;
+    paymentLink: string;
+  }): Promise<void> {
+    const priceLine = opts.price !== undefined
+      ? `💰 Valor: $${opts.price.toLocaleString('es-CO')}\n`
+      : '';
     const message =
-      `🎯 RESERVA LISTA PARA PAGO.\n` +
-      `USUARIO: ${userName}\n` +
-      `Parque ${parkName}:\n` +
-      `${concept}\n` +
-      `\nLink:\n${paymentLink}`;
+      `🎯 ¡CANCHA ENCONTRADA Y RESERVADA!\n` +
+      `👤 Usuario: ${opts.userName}\n` +
+      `📍 Cancha: ${opts.courtName} (ID: ${opts.courtId})\n` +
+      `🏟️ Ubicación: ${opts.parkName}\n` +
+      `📅 Fecha: ${opts.date}\n` +
+      `⏰ Horario: ${opts.timeSlot}\n` +
+      priceLine +
+      `🔗 Link de pago PSE: ${opts.paymentLink}\n` +
+      `⏳ Tienes 15 minutos para completar el pago.`;
 
     await this.sendToAll(message);
   }
@@ -108,15 +119,5 @@ export class TelegramNotifier {
     }
   }
 
-  /**
-   * Sends a test message to verify connectivity
-   */
-  async sendTestMessage(): Promise<boolean> {
-    try {
-      await this.sendToAll('✅ Bot de Reservas IDRD - Conexión verificada');
-      return true;
-    } catch {
-      return false;
-    }
-  }
+
 }

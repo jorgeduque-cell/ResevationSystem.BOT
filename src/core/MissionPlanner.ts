@@ -1,68 +1,50 @@
 // =========================================================
-// MISSION PLANNER - Asignación parque + fecha por cuenta
-// Extraído del nodo "Code in JavaScript" del Comandante
+// MISSION PLANNER - Dynamic court-based mission assignment
+// 6 accounts per court_id, rotating target days per account
 // =========================================================
 
-import { AccountConfig, Mission, ParkConfig } from '../types';
+import { AccountConfig, CourtInfo, Mission } from '../types';
 import { getNextDateForDay } from '../utils/date';
 
-// Días objetivo en orden: Mar, Mié, Jue, Vie, Sáb, Lun
-// (0=Dom, 1=Lun, 2=Mar, 3=Mié, 4=Jue, 5=Vie, 6=Sáb)
+// Días objetivo: Mar, Mié, Jue, Vie, Sáb, Lun (0=Dom ... 6=Sáb)
 const TARGET_DAYS = [2, 3, 4, 5, 6, 1];
 
+const ACCOUNTS_PER_COURT = 6;
+
 export class MissionPlanner {
-  private sanAndres: ParkConfig;
-  private juanAmarillo: ParkConfig;
-  private florencia: ParkConfig;
-
-  constructor(sanAndres: ParkConfig, juanAmarillo: ParkConfig, florencia: ParkConfig) {
-    this.sanAndres = sanAndres;
-    this.juanAmarillo = juanAmarillo;
-    this.florencia = florencia;
-  }
-
   /**
-   * Generates missions for all accounts
-   * Accounts 1-6   → San Andrés
-   * Accounts 7-12  → Juan Amarillo
-   * Accounts 13-18 → Florencia
-   * Each gets a day from TARGET_DAYS in order
+   * Distributes accounts across the supplied courts.
+   * For N courts: first 6 accounts → courts[0], next 6 → courts[1], etc.
+   * Within each group, accounts rotate through TARGET_DAYS.
+   * If there are fewer accounts than 6×N, any remaining courts get fewer bots
+   * (or, if length is 0, the court is skipped).
    */
-  generateMissions(accounts: AccountConfig[], tokenMap: Map<number, string>): Mission[] {
+  generateMissions(
+    accounts: AccountConfig[],
+    courts: CourtInfo[],
+    tokenMap: Map<number, string>,
+  ): Mission[] {
     const missions: Mission[] = [];
+    if (courts.length === 0) return missions;
 
-    for (let i = 0; i < accounts.length && i < 18; i++) {
+    for (let i = 0; i < accounts.length; i++) {
+      const courtIndex = Math.floor(i / ACCOUNTS_PER_COURT);
+      if (courtIndex >= courts.length) break; // no more courts to assign
+
       const account = accounts[i];
       const token = tokenMap.get(account.index);
+      if (!token) continue;
 
-      if (!token) {
-        continue; // Skip accounts without valid tokens
-      }
-
-      let park: ParkConfig;
-      let dayIndex: number;
-
-      if (i < 6) {
-        // Group 1: Accounts 1-6 → San Andrés
-        park = this.sanAndres;
-        dayIndex = i;
-      } else if (i < 12) {
-        // Group 2: Accounts 7-12 → Juan Amarillo
-        park = this.juanAmarillo;
-        dayIndex = i - 6;
-      } else {
-        // Group 3: Accounts 13-18 → Florencia
-        park = this.florencia;
-        dayIndex = i - 12;
-      }
-
+      const court = courts[courtIndex];
+      const dayIndex = i % ACCOUNTS_PER_COURT;
       const targetDayOfWeek = TARGET_DAYS[dayIndex];
       const targetDate = getNextDateForDay(targetDayOfWeek);
 
       missions.push({
         missionId: `Mision-${i + 1}`,
         account,
-        park,
+        targetCourtId: court.courtId,
+        court,
         targetDate,
         token,
       });
