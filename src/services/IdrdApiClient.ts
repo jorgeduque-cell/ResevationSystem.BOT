@@ -16,20 +16,48 @@ export class IdrdApiClient {
       'Content-Type': 'application/json',
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'Accept': 'application/json, text/plain, */*',
-      'Accept-Language': 'es-CO,es;q=0.9,en;q=0.8',
     };
 
     this.citizenClient = axios.create({
       baseURL: citizenBaseUrl,
       timeout: 30000,
       headers: browserHeaders,
+      decompress: false,
     });
 
     this.contractorClient = axios.create({
       baseURL: contractorBaseUrl,
       timeout: 30000,
       headers: browserHeaders,
+      decompress: false,
     });
+
+    // Strip axios default headers that IDRD rejects (Accept-Encoding, etc.)
+    const stripDefaults = (config: any) => {
+      if (config.headers) {
+        delete config.headers['Accept-Encoding'];
+        delete config.headers['accept-encoding'];
+      }
+      return config;
+    };
+    this.citizenClient.interceptors.request.use(stripDefaults);
+    this.contractorClient.interceptors.request.use(stripDefaults);
+
+    // Log request details on error to diagnose 405
+    const logOnError = (error: any) => {
+      if (error?.response?.status === 405) {
+        logger.error({
+          sentHeaders: error.config?.headers,
+          url: error.config?.url,
+          method: error.config?.method,
+          receivedHeaders: error.response?.headers,
+          responseBody: error.response?.data,
+        }, '🔍 DIAGNÓSTICO 405: headers enviados vs respuesta');
+      }
+      return Promise.reject(error);
+    };
+    this.citizenClient.interceptors.response.use(undefined, logOnError);
+    this.contractorClient.interceptors.response.use(undefined, logOnError);
 
     // Retry config: 3 attempts with exponential backoff
     axiosRetry(this.citizenClient, {
