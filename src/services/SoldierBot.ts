@@ -173,6 +173,7 @@ export class SoldierBot {
               },
             );
 
+            log.info({ rawPseResponse: pseResponse }, '🔬 Respuesta cruda del contractor PSE');
             paymentLink = extractPaymentLink(pseResponse);
             const paymentId = extractPaymentId(pseResponse);
             log.info({ paymentLink, paymentId }, '💳 Link de pago generado');
