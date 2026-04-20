@@ -29,10 +29,10 @@ export class IdrdApiClient {
       baseURL: contractorBaseUrl,
       timeout: 30000,
       headers: browserHeaders,
-      decompress: false,
     });
 
-    // Strip axios default headers that IDRD rejects (Accept-Encoding, etc.)
+    // Strip Accept-Encoding only on citizen (the /login endpoint rejects it with 405).
+    // Contractor must keep default decompression so the PSE JSON response is parsed correctly.
     const stripDefaults = (config: any) => {
       if (config.headers) {
         delete config.headers['Accept-Encoding'];
@@ -41,7 +41,6 @@ export class IdrdApiClient {
       return config;
     };
     this.citizenClient.interceptors.request.use(stripDefaults);
-    this.contractorClient.interceptors.request.use(stripDefaults);
 
     // Log request details on error to diagnose 405
     const logOnError = (error: any) => {
