@@ -42,16 +42,17 @@ export class IdrdApiClient {
     };
     this.citizenClient.interceptors.request.use(stripDefaults);
 
-    // Log request details on error to diagnose 405
+    // Log request details on auth/method errors (405 / 401) for diagnostics
     const logOnError = (error: any) => {
-      if (error?.response?.status === 405) {
+      const status = error?.response?.status;
+      if (status === 405 || status === 401) {
         logger.error({
           sentHeaders: error.config?.headers,
           url: error.config?.url,
           method: error.config?.method,
           receivedHeaders: error.response?.headers,
           responseBody: error.response?.data,
-        }, '🔍 DIAGNÓSTICO 405: headers enviados vs respuesta');
+        }, `🔍 DIAGNÓSTICO ${status}: headers enviados vs respuesta`);
       }
       return Promise.reject(error);
     };
@@ -132,7 +133,14 @@ export class IdrdApiClient {
         parkSelected: parkId,
         document: String(document),
       },
-      { headers: { Authorization: `Bearer ${token}` } }
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Origin: 'https://portalciudadano.idrd.gov.co',
+          Referer: 'https://portalciudadano.idrd.gov.co/app/reservas',
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+      }
     );
     return response.data;
   }
