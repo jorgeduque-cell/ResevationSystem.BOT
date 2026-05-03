@@ -346,11 +346,40 @@ function setupTelegramCommands(config: AppConfig): void {
     }
   });
 
-  bot.on('polling_error', (error: any) => {
-    if (error.code !== 'ETELEGRAM' || !error.message?.includes('terminated')) {
-      logger.warn({ error: error.message }, 'Telegram polling error');
+  let pollingRestartInProgress = false;
+  bot.on('polling_error', async (error: any) => {
+    const isTerminated = error.code === 'ETELEGRAM' && error.message?.includes('terminated');
+    if (!isTerminated) {
+      logger.warn({ code: error.code, error: error.message }, 'Telegram polling error');
+    }
+
+    if (pollingRestartInProgress) return;
+    const fatalCodes = ['EFATAL', 'EPARSE', 'ENETUNREACH', 'ECONNRESET', 'ETIMEDOUT'];
+    const shouldRestart =
+      fatalCodes.includes(error.code) ||
+      (error.code === 'ETELEGRAM' && /409|404|401/.test(error.message ?? '')) ||
+      /socket hang up|read ECONN|getaddrinfo/.test(error.message ?? '');
+    if (!shouldRestart) return;
+
+    pollingRestartInProgress = true;
+    logger.error({ code: error.code, error: error.message }, '🔄 Reiniciando polling de Telegram...');
+    try {
+      await bot.stopPolling({ cancel: true });
+      await new Promise((r) => setTimeout(r, 2000));
+      await bot.startPolling({ restart: true });
+      logger.info('✅ Polling de Telegram reiniciado');
+    } catch (restartErr: any) {
+      logger.error({ error: restartErr.message }, '❌ Falló reinicio de polling — saliendo para que PM2 reinicie');
+      process.exit(1);
+    } finally {
+      pollingRestartInProgress = false;
     }
   });
+
+  // Heartbeat: log every 30 min so an external check (file mtime) can detect a zombie process.
+  setInterval(() => {
+    logger.info({ deployments: deployments.size }, '💓 alive');
+  }, 30 * 60 * 1000);
 }
 
 async function main() {
