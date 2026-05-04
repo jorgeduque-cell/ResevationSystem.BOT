@@ -120,12 +120,6 @@ export interface PsePaymentResponse {
   };
 }
 
-/** Telegram notification targets */
-export interface TelegramTarget {
-  botToken: string;
-  chatId: string;
-}
-
 /** Bot execution status */
 export type BotStatus = 'idle' | 'searching' | 'found' | 'reserved' | 'completed' | 'stopped' | 'aborted' | 'error';
 
@@ -152,8 +146,8 @@ export interface BotExecutionResult {
 export interface AppConfig {
   accounts: AccountConfig[];
   telegram: {
-    bot901: TelegramTarget;
-    botInv: TelegramTarget;
+    botToken: string;          // Single Telegram bot used for commands AND notifications
+    notifyChatIds: string[];   // Chats that receive reservation notifications
   };
   idrd: {
     citizenUrl: string;

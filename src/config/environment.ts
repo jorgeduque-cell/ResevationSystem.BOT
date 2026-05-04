@@ -10,9 +10,8 @@ import { AppConfig, AccountConfig } from '../types';
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 const envSchema = z.object({
-  // Telegram
-  TELEGRAM_BOT_TOKEN_901: z.string().min(1),
-  TELEGRAM_BOT_TOKEN_INV: z.string().min(1),
+  // Telegram — single bot, multiple notification recipients
+  TELEGRAM_BOT_TOKEN: z.string().min(1),
   TELEGRAM_CHAT_ADMIN: z.string().min(1),
   TELEGRAM_CHAT_NICOLAS: z.string().min(1),
 
@@ -53,14 +52,8 @@ export function loadConfig(): AppConfig {
   return {
     accounts,
     telegram: {
-      bot901: {
-        botToken: env.TELEGRAM_BOT_TOKEN_901,
-        chatId: env.TELEGRAM_CHAT_ADMIN,
-      },
-      botInv: {
-        botToken: env.TELEGRAM_BOT_TOKEN_INV,
-        chatId: env.TELEGRAM_CHAT_NICOLAS,
-      },
+      botToken: env.TELEGRAM_BOT_TOKEN,
+      notifyChatIds: [env.TELEGRAM_CHAT_ADMIN, env.TELEGRAM_CHAT_NICOLAS],
     },
     idrd: {
       citizenUrl: env.IDRD_CITIZEN_URL,

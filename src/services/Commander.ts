@@ -44,10 +44,10 @@ export class Commander {
 
     this.tokenManager = new TokenManager(this.apiClient);
 
-    this.telegram = new TelegramNotifier([
-      config.telegram.bot901,
-      config.telegram.botInv,
-    ]);
+    this.telegram = new TelegramNotifier(
+      config.telegram.botToken,
+      config.telegram.notifyChatIds,
+    );
 
     this.catalog = new CourtCatalog(this.apiClient);
   }
