@@ -49,9 +49,28 @@ export class TokenManager {
 
   /**
    * Refreshes tokens for ALL accounts (sequential, with throttle)
-   * Replaces the entire "Acceso Maestro" workflow
+   * Replaces the entire "Acceso Maestro" workflow.
+   * Reuses an in-memory cache if the last full refresh is recent enough — this
+   * avoids the duplicate ~36s login loop between /empieza (validateCourts) and
+   * /si (deploy), which both call this method back-to-back.
    */
   async refreshAllTokens(accounts: AccountConfig[]): Promise<Map<number, string>> {
+    const FRESHNESS_MS = 5 * 60 * 1000;
+    const ageMs = this.cache.lastFullRefresh
+      ? Date.now() - new Date(this.cache.lastFullRefresh).getTime()
+      : Infinity;
+    const allCached = accounts.every((a) =>
+      this.cache.tokens.some((t) => t.accountIndex === a.index),
+    );
+    if (ageMs < FRESHNESS_MS && allCached) {
+      const tokenMap = new Map<number, string>();
+      this.cache.tokens.forEach((t) => tokenMap.set(t.accountIndex, t.accessToken));
+      logger.info(
+        `🔑 Reutilizando tokens en caché (refrescados hace ${Math.round(ageMs / 1000)}s, ${tokenMap.size} cuentas)`,
+      );
+      return tokenMap;
+    }
+
     const tokenMap = new Map<number, string>();
     const updatedEntries: TokenEntry[] = [];
 

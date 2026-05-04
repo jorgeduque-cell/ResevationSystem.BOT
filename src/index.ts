@@ -312,7 +312,10 @@ function setupTelegramCommands(config: AppConfig): void {
 
     const courtEntries = parsed.data;
     const courtIds = courtEntries.map((c) => c.id);
-    await bot.sendMessage(chatId, '🔎 Validando IDs contra el catálogo IDRD... (puede tomar unos segundos)');
+    await bot.sendMessage(
+      chatId,
+      '🔐 Iniciando sesión en las cuentas IDRD y validando IDs... (puede tomar ~30s la primera vez; los tokens se reutilizan los próximos 5 min)',
+    );
 
     try {
       const commander = new Commander(config, isDryRun);
