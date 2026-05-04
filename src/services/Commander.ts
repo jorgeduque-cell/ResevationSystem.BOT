@@ -156,7 +156,7 @@ export class Commander {
     );
 
     const botPromises = missions.map((mission) =>
-      soldierBot.execute(mission, 0, 24, signal),
+      soldierBot.execute(mission, signal),
     );
 
     const results = await Promise.allSettled(botPromises);
