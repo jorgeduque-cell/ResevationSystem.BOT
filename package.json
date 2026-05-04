@@ -10,7 +10,8 @@
     "dev": "ts-node src/index.ts",
     "dev:dry": "ts-node src/index.ts --dry-run",
     "test": "jest --verbose",
-    "test:watch": "jest --watch"
+    "test:watch": "jest --watch",
+    "stress": "ts-node __tests__/stress/run.ts"
   },
   "dependencies": {
     "axios": "^1.7.0",
