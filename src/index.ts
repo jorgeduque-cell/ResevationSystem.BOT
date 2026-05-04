@@ -94,12 +94,31 @@ async function runDeployment(
 }
 
 function setupTelegramCommands(config: AppConfig): void {
-  const bot = new TelegramBot(config.telegram.botInv.botToken, { polling: true });
   const sessions = new SessionManager();
 
-  logger.info('📱 Telegram Bot activo (modo dinámico). Comandos:');
+  // Poll every distinct bot token so each authorized user can interact with
+  // whichever bot delivers their notifications — admin uses bot901
+  // (@RioRiverbot), Nicolas uses botInv. If both env vars point to the same
+  // token, only one polling instance is created (Telegram rejects duplicates).
+  const tokens = new Set<string>([
+    config.telegram.bot901.botToken,
+    config.telegram.botInv.botToken,
+  ]);
+  for (const token of tokens) {
+    const bot = new TelegramBot(token, { polling: true });
+    bindBotHandlers(bot, config, sessions);
+  }
+
+  logger.info(`📱 ${tokens.size} bot(s) de Telegram activo(s). Comandos:`);
   logger.info('   /empieza /canchas /ids /cambiar /estado /termina /cancelar /si /no');
 
+  // Heartbeat: log every 30 min so an external check (file mtime) can detect a zombie process.
+  setInterval(() => {
+    logger.info({ deployments: deployments.size }, '💓 alive');
+  }, 30 * 60 * 1000);
+}
+
+function bindBotHandlers(bot: TelegramBot, config: AppConfig, sessions: SessionManager): void {
   const authorize = async (msg: TelegramBot.Message): Promise<boolean> => {
     const userId = msg.from?.id;
     if (!userId || !AUTHORIZED_USERS.has(userId)) {
@@ -378,11 +397,6 @@ function setupTelegramCommands(config: AppConfig): void {
       pollingRestartInProgress = false;
     }
   });
-
-  // Heartbeat: log every 30 min so an external check (file mtime) can detect a zombie process.
-  setInterval(() => {
-    logger.info({ deployments: deployments.size }, '💓 alive');
-  }, 30 * 60 * 1000);
 }
 
 async function main() {
