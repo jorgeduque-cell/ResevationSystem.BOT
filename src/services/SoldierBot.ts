@@ -11,7 +11,7 @@ import { TelegramNotifier } from './TelegramNotifier';
 import { TokenManager } from './TokenManager';
 import { extractPaymentLink, extractPaymentId } from './PaymentService';
 import { createBotLogger } from '../utils/logger';
-import { isWithinOperatingHours, sleepWithJitter, nowBogota } from '../utils/date';
+import { sleepWithJitter } from '../utils/date';
 
 const MAX_CONSECUTIVE_ERRORS = 10;
 const CIRCUIT_BREAKER_PAUSE_MS = 60_000; // 60 seconds
@@ -46,8 +46,6 @@ export class SoldierBot {
    */
   async execute(
     mission: Mission,
-    botStartHour: number,
-    botStopHour: number,
     signal?: AbortSignal,
   ): Promise<BotExecutionResult> {
     const log = createBotLogger(mission.missionId, `${mission.court.parkName}/${mission.court.courtName}`);
@@ -67,7 +65,7 @@ export class SoldierBot {
     // ============================
     // MAIN LOOP
     // ============================
-    while (isWithinOperatingHours(botStartHour, botStopHour)) {
+    while (true) {
       // === CHECK ABORT SIGNAL ===
       if (signal?.aborted) {
         status = 'aborted';
@@ -116,9 +114,11 @@ export class SoldierBot {
         if (!result.found) {
           // Log diagnosis every 10 attempts to keep logs readable
           if (slotsChecked === 1 || slotsChecked % 10 === 0) {
-            log.info(`Intento #${slotsChecked} sin hueco → ${result.debugInfo}`);
+            log.info(
+              `Intento #${slotsChecked} sin hueco (${reservationCount} reservas previas) → ${result.debugInfo}`,
+            );
           }
-          await sleepWithJitter(1500, 3000);
+          await sleepWithJitter(600, 1200);
           continue;
         }
 
@@ -197,11 +197,16 @@ export class SoldierBot {
 
           reservationCount++;
           paymentLinks.push(paymentLink!);
-          log.info(`🏆 ${mission.missionId} RESERVA #${reservationCount} EXITOSA. Continuando búsqueda...`);
-          await sleepWithJitter(3000, 5000);
+          log.info(
+            `🏆 ${mission.missionId} RESERVA #${reservationCount} EXITOSA. Esperando que IDRD libere el slot a los ~4 min para re-reservar...`,
+          );
+          // Slot stays locked by IDRD for ~4 min. Poll aggressively so we grab
+          // it the moment it reappears in getSchedules.
+          await sleepWithJitter(800, 1500);
+          continue;
         } else {
           log.warn({ code: reservation.code }, 'Reserva devolvió código != 200, reintentando...');
-          await sleepWithJitter(1500, 3000);
+          await sleepWithJitter(800, 1500);
           continue;
         }
       } catch (error: any) {
@@ -250,12 +255,6 @@ export class SoldierBot {
           await sleepWithJitter(2000, 5000);
         }
       }
-    }
-
-    // Operating hours ended
-    if (status === 'searching') {
-      status = 'stopped';
-      log.info(`⏰ ${mission.missionId} - Ventana de operación terminada (${botStopHour}:00). Total intentos: ${slotsChecked}`);
     }
 
     return {
