@@ -22,8 +22,6 @@ const envSchema = z.object({
   IDRD_CONTRACTOR_URL: z.string().url(),
 
   // Schedule
-  BOT_START_HOUR: z.string().transform(Number).default('9'),
-  BOT_STOP_HOUR: z.string().transform(Number).default('13'),
   SLOT_START_HOUR: z.string().transform(Number).default('20'),
   SLOT_END_HOUR: z.string().transform(Number).default('22'),
   MIN_ANTICIPATION_HOURS: z.string().transform(Number).default('24'),
@@ -69,8 +67,6 @@ export function loadConfig(): AppConfig {
       contractorUrl: env.IDRD_CONTRACTOR_URL,
     },
     schedule: {
-      botStartHour: env.BOT_START_HOUR,
-      botStopHour: env.BOT_STOP_HOUR,
       slotStartHour: env.SLOT_START_HOUR,
       slotEndHour: env.SLOT_END_HOUR,
       minAnticipationHours: env.MIN_ANTICIPATION_HOURS,

@@ -160,8 +160,6 @@ export interface AppConfig {
     contractorUrl: string;
   };
   schedule: {
-    botStartHour: number;
-    botStopHour: number;
     slotStartHour: number;
     slotEndHour: number;
     minAnticipationHours: number;

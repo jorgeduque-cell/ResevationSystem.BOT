@@ -58,19 +58,6 @@ export function getNextDateForDay(targetDay: number, fromDate?: Date): string {
 }
 
 /**
- * Checks if current time is within the bot operating window
- */
-export function isWithinOperatingHours(startHour: number, stopHour: number): boolean {
-  const now = nowBogota();
-  const currentHour = now.getHours();
-  const currentMinute = now.getMinutes();
-
-  // Convert to comparable number (e.g., 9:30 = 9.5)
-  const currentTime = currentHour + currentMinute / 60;
-  return currentTime >= startHour && currentTime < stopHour;
-}
-
-/**
  * Sleep for a given number of milliseconds
  */
 export function sleep(ms: number): Promise<void> {
