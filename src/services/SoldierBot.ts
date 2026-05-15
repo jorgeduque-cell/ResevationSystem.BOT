@@ -136,17 +136,13 @@ export class SoldierBot {
           continue;
         }
 
-        // 3a. Login JIT (token fresco para la reserva)
-        log.info('Haciendo Login JIT para reserva...');
-        let freshToken: string;
-        try {
-          freshToken = await this.tokenManager.refreshSingleToken(mission.account);
-        } catch {
-          log.error('Login JIT fallido, reintentando con token existente...');
-          freshToken = mission.token;
-        }
-
-        // 3b. Crear reserva
+        // 3a. Crear reserva inmediatamente con el token de la misión.
+        // El token IDRD vale 8h, así que reutilizarlo es seguro durante toda
+        // la sesión. El antiguo "Login JIT" agregaba un POST /login en el hot
+        // path crítico de la reserva, justo al mismo endpoint que se satura
+        // los lunes 9 AM — perdíamos segundos a manos de usuarios humanos
+        // mientras esperábamos un token "fresco" innecesario. Si el token
+        // realmente expira, el catch de 401 más abajo lo refresca y reintenta.
         log.info('Creando reserva...');
         const reservation = await this.apiClient.createReservation(
           mission.court.parkId,
@@ -154,35 +150,57 @@ export class SoldierBot {
           result.startHourFormatted!,
           result.endHourFormatted!,
           mission.account.document,
-          freshToken,
+          mission.token,
         );
 
-        // 3c. Verificar respuesta
+        // 3b. Verificar respuesta
         if (reservation.code === 200 || (reservation as any).code === 200) {
           log.info('✅ Reserva exitosa! Generando link de pago...');
 
-          // 3d. Generar link PSE
-          try {
-            const pseResponse = await this.apiClient.generatePaymentLink(
-              reservation.data,
-              freshToken,
-              {
-                name: mission.account.name,
-                document: mission.account.document,
-                email: mission.account.email,
-              },
-            );
-
-            log.info({ rawPseResponse: pseResponse }, '🔬 Respuesta cruda del contractor PSE');
-            paymentLink = extractPaymentLink(pseResponse);
-            const paymentId = extractPaymentId(pseResponse);
-            log.info({ paymentLink, paymentId }, '💳 Link de pago generado');
-          } catch (pseError: any) {
-            log.warn({ error: pseError.message }, 'Error generando link PSE, usando link por defecto');
-            paymentLink = 'https://portalciudadano.idrd.gov.co/app/pagos';
+          // 3c. Generar link PSE con reintentos.
+          // Bajo carga alta, el contractor PSE a veces responde 200 con body
+          // vacío/malformado, o tira 5xx/timeout. Reintentamos hasta 5 veces
+          // exigiendo una URL real (no el fallback genérico de extractPaymentLink).
+          // Si igual no logramos una URL útil, devolvemos un mensaje accionable
+          // con el booking_id en vez del link genérico que llevaría al usuario
+          // a una página donde no puede pagar.
+          const FALLBACK_PORTAL_URL = 'https://portalciudadano.idrd.gov.co/app/pagos';
+          const PSE_MAX_ATTEMPTS = 5;
+          let realPseLink: string | undefined;
+          for (let attempt = 1; attempt <= PSE_MAX_ATTEMPTS; attempt++) {
+            try {
+              const pseResponse = await this.apiClient.generatePaymentLink(
+                reservation.data,
+                mission.token,
+                {
+                  name: mission.account.name,
+                  document: mission.account.document,
+                  email: mission.account.email,
+                },
+              );
+              const candidate = extractPaymentLink(pseResponse);
+              if (candidate && candidate !== FALLBACK_PORTAL_URL) {
+                realPseLink = candidate;
+                const paymentId = extractPaymentId(pseResponse);
+                log.info({ paymentLink: realPseLink, paymentId, attempt }, '💳 Link de pago generado');
+                break;
+              }
+              log.warn({ attempt }, 'PSE respondió sin URL útil, reintentando...');
+            } catch (pseError: any) {
+              log.warn({ attempt, error: pseError.message }, 'Error generando link PSE');
+            }
+            if (attempt < PSE_MAX_ATTEMPTS) await sleepWithJitter(400, 900);
           }
 
-          // 3e. Notificar por Telegram (rich format, spec-compliant)
+          if (realPseLink) {
+            paymentLink = realPseLink;
+          } else {
+            const bookingId = reservation.data?.booking_id ?? 'desconocido';
+            log.error({ bookingId }, '❌ PSE falló tras 5 intentos — enviando link manual con booking_id');
+            paymentLink = `${FALLBACK_PORTAL_URL} — busca tu reserva #${bookingId} en "Mis reservas"`;
+          }
+
+          // 3d. Notificar por Telegram (rich format, spec-compliant)
           const price = reservation.data?.amount ?? result.price;
           await this.telegram.notifyCourtFound({
             userName: mission.account.name,
