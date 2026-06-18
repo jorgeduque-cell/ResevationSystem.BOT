@@ -15,6 +15,13 @@ import { sleepWithJitter } from '../utils/date';
 
 const MAX_CONSECUTIVE_ERRORS = 10;
 const CIRCUIT_BREAKER_PAUSE_MS = 60_000; // 60 seconds
+const LOGIN_STAGGER_MS = 200; // initial logins spaced by accountIndex * this
+
+// Re-búsqueda agresiva: tras una reserva el bot NO se detiene. IDRD libera el
+// slot por tiempo (p. ej. si no se completa el pago), así que seguimos sondeando
+// a ~1s para re-reservarlo apenas reaparezca — reacción muy por debajo de 10s.
+const REPOLL_AFTER_RESERVE_MIN_MS = 800;
+const REPOLL_AFTER_RESERVE_MAX_MS = 1500;
 
 export class SoldierBot {
   private apiClient: IdrdApiClient;
@@ -61,6 +68,25 @@ export class SoldierBot {
     log.info(
       `🪖 ${mission.missionId} ACTIVADO - ${mission.account.name} → ${mission.court.parkName}/${mission.court.courtName} (ID ${mission.targetCourtId}) fecha ${mission.targetDate}`
     );
+
+    // ============================
+    // STARTUP: cada bot asegura su PROPIO token, independiente del resto.
+    // Usa caché si sirve; si no, loguea solo esta cuenta (escalonado por índice
+    // para no disparar 18 POST /login simultáneos). Si falla, NO abortamos: el
+    // loop recupera vía el manejo de 401 más abajo. Una cuenta caída nunca
+    // bloquea ni reinicia a las otras 17.
+    // ============================
+    if (!signal?.aborted) {
+      try {
+        const staggerMs = (mission.account.index - 1) * LOGIN_STAGGER_MS;
+        mission.token = await this.tokenManager.ensureToken(mission.account, staggerMs);
+      } catch (err: any) {
+        log.warn(
+          { err: err.message },
+          'No se pudo obtener token inicial; el loop intentará recuperar vía 401',
+        );
+      }
+    }
 
     // ============================
     // MAIN LOOP
@@ -114,10 +140,13 @@ export class SoldierBot {
         if (!result.found) {
           // Log diagnosis every 10 attempts to keep logs readable
           if (slotsChecked === 1 || slotsChecked % 10 === 0) {
+            const mode = reservationCount > 0 ? '🔁 re-búsqueda agresiva' : 'búsqueda';
             log.info(
-              `Intento #${slotsChecked} sin hueco (${reservationCount} reservas previas) → ${result.debugInfo}`,
+              `Intento #${slotsChecked} sin hueco (${mode}, ${reservationCount} reservas previas) → ${result.debugInfo}`,
             );
           }
+          // Cadencia de sondeo ~1s: si IDRD ya liberó (o libera) el slot, lo
+          // detectamos y re-reservamos en segundos, nunca cerca de los 10s.
           await sleepWithJitter(600, 1200);
           continue;
         }
@@ -216,11 +245,14 @@ export class SoldierBot {
           reservationCount++;
           paymentLinks.push(paymentLink!);
           log.info(
-            `🏆 ${mission.missionId} RESERVA #${reservationCount} EXITOSA. Esperando que IDRD libere el slot a los ~4 min para re-reservar...`,
+            `🏆 ${mission.missionId} RESERVA #${reservationCount} EXITOSA (${result.startHourFormatted} - ${result.endHourFormatted}). ` +
+              `Re-búsqueda AGRESIVA: NO paramos. Si IDRD libera el slot por tiempo, lo re-reservamos en segundos.`,
           );
-          // Slot stays locked by IDRD for ~4 min. Poll aggressively so we grab
-          // it the moment it reappears in getSchedules.
-          await sleepWithJitter(800, 1500);
+          // El bot NUNCA se detiene tras reservar. IDRD mantiene el slot bloqueado
+          // un rato y luego lo libera por tiempo (si no se completa el pago).
+          // Seguimos sondeando agresivamente (~1s) para volver a tomarlo apenas
+          // reaparezca en getSchedules — reacción muy por debajo de los 10s.
+          await sleepWithJitter(REPOLL_AFTER_RESERVE_MIN_MS, REPOLL_AFTER_RESERVE_MAX_MS);
           continue;
         } else {
           log.warn({ code: reservation.code }, 'Reserva devolvió código != 200, reintentando...');

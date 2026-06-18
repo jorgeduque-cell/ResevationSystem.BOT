@@ -101,18 +101,22 @@ export class Commander {
       return [];
     }
 
-    // === PHASE 1: Token refresh ===
-    logger.info('📡 Fase 1: Refrescando tokens de todas las cuentas...');
-    const tokenMap = await this.tokenManager.refreshAllTokens(this.config.accounts);
-
-    if (tokenMap.size === 0) {
-      logger.error('❌ No se obtuvo ningún token. Abortando.');
-      await this.telegram.notifyBotStatus('❌ COMANDANTE: No se pudo hacer login a ninguna cuenta. Abortando misión.');
-      return [];
+    // === PHASE 1: Seed mission tokens (sin barrera de login global) ===
+    // Deliberadamente NO llamamos refreshAllTokens() aquí. El login secuencial
+    // de las 18 cuentas (~36s) bloqueaba a toda la flota, y un solo login caído
+    // podía frenar/reiniciar a todos. En su lugar, cada SoldierBot autentica su
+    // PROPIA cuenta al arranque (ensureToken, escalonado) y recupera su PROPIO
+    // token ante un 401 — así una cuenta rota nunca afecta a las otras 17.
+    // Sembramos el tokenMap desde el caché en disco (instantáneo). Las cuentas
+    // sin token cacheado reciben un placeholder vacío; el bot las loguea al inicio.
+    logger.info('📡 Fase 1: Sembrando tokens desde caché (cada bot se autentica solo)...');
+    const tokenMap = new Map<number, string>();
+    for (const account of this.config.accounts) {
+      tokenMap.set(account.index, this.tokenManager.getCachedToken(account.index) ?? '');
     }
 
     if (signal?.aborted) {
-      logger.info('🛑 Señal de aborto recibida después de token refresh.');
+      logger.info('🛑 Señal de aborto recibida antes de generar misiones.');
       return [];
     }
 
@@ -120,6 +124,12 @@ export class Commander {
     logger.info('📋 Fase 2: Generando misiones dinámicas (6 cuentas por cancha)...');
     const planner = new MissionPlanner();
     const missions = planner.generateMissions(this.config.accounts, courts, tokenMap);
+
+    if (missions.length === 0) {
+      logger.error('❌ No se generó ninguna misión. Abortando.');
+      await this.telegram.notifyBotStatus('❌ COMANDANTE: No se generó ninguna misión. Abortando.');
+      return [];
+    }
 
     logger.info(`📋 ${missions.length} misiones generadas:`);
     for (const m of missions) {

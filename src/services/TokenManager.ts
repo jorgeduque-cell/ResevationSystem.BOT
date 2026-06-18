@@ -13,6 +13,10 @@ import { sleep } from '../utils/date';
 const TOKENS_FILE = path.resolve(__dirname, '../../data/tokens.json');
 const TOKENS_DIR = path.resolve(__dirname, '../../data');
 
+// IDRD tokens last ~8h. Reuse a cached single-account token while it's
+// comfortably within that window; beyond this, ensureToken() re-logs in.
+const TOKEN_TTL_MS = 6 * 60 * 60 * 1000;
+
 export class TokenManager {
   private apiClient: IdrdApiClient;
   private cache: TokenCache;
@@ -124,16 +128,67 @@ export class TokenManager {
   }
 
   /**
-   * Gets a fresh token for a single account (for JIT login during reservation)
+   * Ensures a SINGLE account has a usable token, without touching the rest of
+   * the fleet. Reuses the cached token if it's fresh enough; otherwise logs in
+   * only this account and persists it. The optional stagger spaces out the
+   * initial logins so 18 bots don't all hit POST /login at the same instant.
+   * This is the per-mission login path that keeps each SoldierBot independent.
+   */
+  async ensureToken(account: AccountConfig, staggerMs: number = 0): Promise<string> {
+    const cached = this.cache.tokens.find((t) => t.accountIndex === account.index);
+    if (cached?.accessToken) {
+      const ageMs = Date.now() - new Date(cached.updatedAt).getTime();
+      if (ageMs < TOKEN_TTL_MS) {
+        logger.info(
+          { account: account.index },
+          `🔑 Reutilizando token cacheado cuenta ${account.index} (edad ${Math.round(ageMs / 1000)}s)`,
+        );
+        return cached.accessToken;
+      }
+    }
+    // Only delay when we actually need to hit /login.
+    if (staggerMs > 0) await sleep(staggerMs);
+    logger.info({ account: account.index }, `🔑 Login inicial cuenta ${account.index} (${account.name})`);
+    return this.refreshSingleToken(account);
+  }
+
+  /**
+   * Gets a fresh token for a single account (recovery on 401 / circuit breaker,
+   * and initial login via ensureToken). Persists the refreshed token so it
+   * survives restarts and is visible to ensureToken()/getCachedToken().
    */
   async refreshSingleToken(account: AccountConfig): Promise<string> {
     try {
       const loginResponse = await this.apiClient.login(account.email, account.password);
-      return loginResponse.access_token;
+      const token = loginResponse.access_token;
+      this.upsertToken(account, token);
+      return token;
     } catch (error: any) {
-      logger.error({ account: account.index, error: error.message }, 'JIT Login fallido');
+      logger.error({ account: account.index, error: error.message }, 'Login de cuenta individual fallido');
       throw error;
     }
+  }
+
+  /**
+   * Inserts or updates a single account's token entry and persists to disk.
+   * Safe under concurrent bots: the read-modify-write is synchronous (no await
+   * between lookup and saveCache), so two bots can't interleave a partial write.
+   */
+  private upsertToken(account: AccountConfig, token: string): void {
+    const existing = this.cache.tokens.find((t) => t.accountIndex === account.index);
+    if (existing) {
+      existing.email = account.email;
+      existing.accessToken = token;
+      existing.updatedAt = new Date().toISOString();
+    } else {
+      this.cache.tokens.push({
+        accountIndex: account.index,
+        email: account.email,
+        accessToken: token,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+    this.saveCache();
   }
 
   /**

@@ -1,6 +1,6 @@
 // =========================================================
 // INDEX.TS - Entry point del Bot de Reservas IDRD (dinámico)
-// Flujo conversacional: /empieza → IDs → validar → /si → buscar
+// Flujo conversacional: /empieza → IDs → validar → buscar (automático)
 // =========================================================
 
 import TelegramBot from 'node-telegram-bot-api';
@@ -99,7 +99,7 @@ function setupTelegramCommands(config: AppConfig): void {
   bindBotHandlers(bot, config, sessions);
 
   logger.info('📱 Telegram bot activo. Comandos:');
-  logger.info('   /empieza /canchas /ids /cambiar /estado /termina /cancelar /si /no');
+  logger.info('   /empieza /canchas /ids /cambiar /estado /termina /cancelar');
 
   // Heartbeat: log every 30 min so an external check (file mtime) can detect a zombie process.
   setInterval(() => {
@@ -129,9 +129,8 @@ function bindBotHandlers(bot: TelegramBot, config: AppConfig, sessions: SessionM
         '⚠️ Ya hay una búsqueda activa con estas canchas:\n' +
           (session.courtInfos?.map((c, i) => `${i + 1}. ${c.courtName} (${c.courtId}) - ${c.parkName}`).join('\n') ||
             session.courtIds.map((id, i) => `${i + 1}. ID ${id}`).join('\n')) +
-          '\n\n¿Deseas reiniciar con nuevas canchas? /si para reiniciar, /no para mantener.',
+          '\n\nUsa /cambiar para buscar otras canchas o /termina para detener.',
       );
-      sessions.setStatus(chatId, 'awaiting_confirmation');
       return;
     }
 
@@ -234,62 +233,14 @@ function bindBotHandlers(bot: TelegramBot, config: AppConfig, sessions: SessionM
     await bot.sendMessage(chatId, '❌ Configuración cancelada. Usa /empieza cuando quieras intentar de nuevo.');
   });
 
-  // === /si  (confirmar arranque / reinicio) ===
+  // === /si  (deprecado: ya no se confirma, la búsqueda arranca automáticamente) ===
   bot.onText(/^\/si$/, async (msg) => {
     if (!(await authorize(msg))) return;
-    const chatId = msg.chat.id;
-    const session = sessions.get(chatId);
-
-    if (!session) {
-      await bot.sendMessage(chatId, '💤 No hay nada que confirmar. Usa /empieza.');
-      return;
-    }
-
-    // Restart flow triggered from /empieza while searching
-    if (session.status === 'awaiting_confirmation' && deployments.has(chatId)) {
-      const deployment = deployments.get(chatId)!;
-      deployment.abort.abort();
-      sessions.clear(chatId);
-      sessions.setCourtIds(chatId, []);
-      sessions.setStatus(chatId, 'configuring');
-      await bot.sendMessage(chatId, '🔄 Búsqueda detenida.\n\nEnvía las 3 canchas nuevas (formato ID:Nombre).\nEjemplo: 15980:San Andrés, 15981:Juan Amarillo, 15369:Florencia');
-      return;
-    }
-
-    // Normal confirm → start
-    if (session.status !== 'awaiting_confirmation' || !session.courtInfos?.length) {
-      await bot.sendMessage(chatId, '⚠️ No hay una configuración pendiente de confirmar. Usa /empieza.');
-      return;
-    }
-
-    const courts = session.courtInfos;
     await bot.sendMessage(
-      chatId,
-      `✅ Configuración completa:\n\n` +
-        courts.map((c, i) => `🎯 Objetivo ${i + 1}: ${c.courtName} (ID ${c.courtId}) en ${c.parkName}`).join('\n') +
-        `\n\n⚔️ Desplegando 18 agentes de búsqueda...\n` +
-        `📍 6 cuentas buscando cada ID simultáneamente\n` +
-        `🔍 Horario objetivo: ${config.schedule.slotStartHour}:00 - ${config.schedule.slotEndHour}:00\n\n` +
-        `Usa /estado para ver progreso o /termina para detener.`,
+      msg.chat.id,
+      'ℹ️ Ya no necesitas confirmar: la búsqueda inicia automáticamente al registrar las canchas.\n' +
+        'Usa /cambiar para buscar otras canchas o /termina para detener.',
     );
-
-    // Fire and forget
-    runDeployment(config, bot, chatId, sessions, courts).catch((err) =>
-      logger.error({ err: err.message }, 'runDeployment failed'),
-    );
-  });
-
-  // === /no  (declinar reinicio) ===
-  bot.onText(/^\/no$/, async (msg) => {
-    if (!(await authorize(msg))) return;
-    const chatId = msg.chat.id;
-    const session = sessions.get(chatId);
-    if (session?.status === 'awaiting_confirmation' && deployments.has(chatId)) {
-      sessions.setStatus(chatId, 'searching');
-      await bot.sendMessage(chatId, '👍 Sigo buscando con las canchas actuales.');
-    } else {
-      await bot.sendMessage(chatId, 'OK.');
-    }
   });
 
   // === free-text handler: capture 3 court IDs while status = 'configuring' ===
@@ -340,13 +291,20 @@ function bindBotHandlers(bot: TelegramBot, config: AppConfig, sessions: SessionM
 
       sessions.setCourtIds(chatId, courtIds);
       sessions.setCourtInfos(chatId, result.courts);
-      sessions.setStatus(chatId, 'awaiting_confirmation');
 
+      // Sin paso de confirmación: la búsqueda arranca automáticamente apenas
+      // las 3 canchas resuelven. runDeployment() pone el estado en 'searching'.
       await bot.sendMessage(
         chatId,
-        `✅ Canchas registradas:\n` +
+        `✅ Canchas registradas — iniciando búsqueda:\n` +
           result.courts.map((c, i) => `${i + 1}. ${c.courtName} (ID ${c.courtId}) - ${c.parkName}`).join('\n') +
-          `\n\n¿Iniciar búsqueda?\n/si para confirmar\n/cancelar para cambiar`,
+          `\n\n🔍 Horario objetivo: ${config.schedule.slotStartHour}:00 - ${config.schedule.slotEndHour}:00\n` +
+          `Usa /estado para ver progreso o /termina para detener.`,
+      );
+
+      // Fire and forget
+      runDeployment(config, bot, chatId, sessions, result.courts).catch((err) =>
+        logger.error({ err: err.message }, 'runDeployment failed'),
       );
     } catch (err: any) {
       logger.error({ err: err.message }, 'Validación de canchas falló');

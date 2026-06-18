@@ -33,7 +33,10 @@ export class MissionPlanner {
 
       const account = accounts[i];
       const token = tokenMap.get(account.index);
-      if (!token) continue;
+      // Skip only accounts genuinely absent from the map. An empty-string seed
+      // is allowed: each SoldierBot acquires/refreshes its own token at startup
+      // (ensureToken), so the mission's initial token is just a best-effort seed.
+      if (token === undefined) continue;
 
       const court = courts[courtIndex];
       const dayIndex = i % ACCOUNTS_PER_COURT;
