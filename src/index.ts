@@ -3,6 +3,11 @@
 // Flujo conversacional: /empieza → IDs → validar → buscar (automático)
 // =========================================================
 
+// IMPORTANTE: fija la TZ del proceso a Bogotá. Debe ir ANTES de cualquier otro
+// import para que toda la lógica de fechas (días objetivo, ventana horaria)
+// use hora de Bogotá aunque el servidor corra en UTC.
+import './config/timezone';
+
 import TelegramBot from 'node-telegram-bot-api';
 import { z } from 'zod';
 import { loadConfig } from './config/environment';

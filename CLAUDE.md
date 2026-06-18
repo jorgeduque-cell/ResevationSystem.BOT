@@ -78,3 +78,16 @@ Comandos:
 - No se tocó el algoritmo Tetris (`AvailabilityEngine`) ni las constantes de ventana horaria/anticipación.
 
 **Listo cuando:** Tras reservar, el bot sigue corriendo y vuelve a reservar el mismo slot apenas IDRD lo libera (verificado con el harness: cada bot hace múltiples reservas en una sola corrida).
+
+## Tarea 4 — Fix timezone (links de domingo) — HECHO
+
+**Problema:** En producción llegaban links de reservas para días incorrectos (p. ej. domingo, que no es día objetivo). Causa raíz: el VPS corre en **UTC**, pero todos los helpers de `src/utils/date.ts` (`nowBogota`, `getNextDateForDay`, `toIsoDate`) y la ventana horaria del `AvailabilityEngine` asumen que la hora local del proceso es Bogotá. En la máquina de desarrollo (UTC-5) eso se cumple → funciona y los tests pasan; en UTC se corre 5h y, en la madrugada de Bogotá, cada fecha objetivo retrocede un día (lunes → domingo).
+
+**Cómo quedó** (sin tocar ninguna config de días ni horarios):
+
+- Nuevo `src/config/timezone.ts` que hace `process.env.TZ = 'America/Bogota'`.
+- Se importa **de primero** en `src/index.ts` (antes que cualquier módulo que use fechas), para que el servidor se comporte igual que local.
+- `ecosystem.config.js`: `env.TZ = 'America/Bogota'` como refuerzo.
+- Verificado: con `TZ=UTC` un objetivo de lunes cae en domingo; con `TZ=America/Bogota` cae en lunes. `TARGET_DAYS` y la ventana 8PM–10PM quedaron intactos.
+
+**Listo cuando:** En el VPS, los días objetivo y los horarios coinciden con Bogotá; no llegan links de domingo. Tras `git pull && npm run build && pm2 restart idrd-bot`, el log de arranque muestra la fecha en hora de Bogotá.

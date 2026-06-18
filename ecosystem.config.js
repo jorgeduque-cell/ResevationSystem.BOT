@@ -10,6 +10,8 @@ module.exports = {
       max_memory_restart: '500M',
       env: {
         NODE_ENV: 'production',
+        // Bot opera en hora de Bogotá; sin esto un VPS en UTC corre las fechas.
+        TZ: 'America/Bogota',
       },
       // Limit restarts to prevent infinite loops
       max_restarts: 5,
