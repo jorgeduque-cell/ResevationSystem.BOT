@@ -4,8 +4,17 @@
 
 import axios, { AxiosInstance } from 'axios';
 import axiosRetry from 'axios-retry';
+import http from 'http';
+import https from 'https';
 import { IdrdLoginResponse, IdrdScheduleSlot, IdrdReservationResponse, PsePaymentResponse } from '../types';
 import { logger } from '../utils/logger';
+
+// Pool de conexiones KEEP-ALIVE: reutiliza la conexión TCP/TLS en vez de
+// rehacer el handshake en cada request. Bajo carga (lunes 9AM, IDRD saturado)
+// esto baja la latencia por petición y la hace más estable. maxSockets acota la
+// concurrencia: inundar de requests empeora la latencia (medido en el recon).
+const keepAliveHttpAgent = new http.Agent({ keepAlive: true, keepAliveMsecs: 30_000, maxSockets: 64 });
+const keepAliveHttpsAgent = new https.Agent({ keepAlive: true, keepAliveMsecs: 30_000, maxSockets: 64 });
 
 export class IdrdApiClient {
   private citizenClient: AxiosInstance;
@@ -23,12 +32,16 @@ export class IdrdApiClient {
       timeout: 30000,
       headers: browserHeaders,
       decompress: false,
+      httpAgent: keepAliveHttpAgent,
+      httpsAgent: keepAliveHttpsAgent,
     });
 
     this.contractorClient = axios.create({
       baseURL: contractorBaseUrl,
       timeout: 30000,
       headers: browserHeaders,
+      httpAgent: keepAliveHttpAgent,
+      httpsAgent: keepAliveHttpsAgent,
     });
 
     // Strip Accept-Encoding only on citizen (the /login endpoint rejects it with 405).

@@ -100,6 +100,19 @@ async function runDeployment(
 
 function setupTelegramCommands(config: AppConfig): void {
   const sessions = new SessionManager();
+
+  // Tras un reinicio el Map `deployments` (en memoria) arranca vacío, así que
+  // cualquier sesión persistida como 'searching' es OBSOLETA: no hay bots
+  // corriendo. Si no la reseteamos, queda un deadlock — /empieza ve el estado
+  // 'searching' y bloquea, pero /termina no encuentra deployment que abortar.
+  // La pasamos a 'stopped' para que el estado en disco refleje la realidad.
+  for (const s of sessions.all()) {
+    if (s.status === 'searching') {
+      sessions.setStatus(s.chatId, 'stopped');
+      logger.info({ chatId: s.chatId }, '♻️ Sesión obsoleta tras reinicio: searching → stopped');
+    }
+  }
+
   const bot = new TelegramBot(config.telegram.botToken, { polling: true });
   bindBotHandlers(bot, config, sessions);
 
@@ -164,6 +177,18 @@ function bindBotHandlers(bot: TelegramBot, config: AppConfig, sessions: SessionM
     const deployment = deployments.get(chatId);
 
     if (!deployment) {
+      // No hay bots en memoria. Si la sesión quedó marcada como 'searching'
+      // (estado obsoleto, p. ej. tras un reinicio), la limpiamos igual para no
+      // dejar al usuario trabado entre /empieza y /termina.
+      const session = sessions.get(chatId);
+      if (session && session.status === 'searching') {
+        sessions.clear(chatId);
+        await bot.sendMessage(
+          chatId,
+          '🛑 No había bots corriendo (estado obsoleto tras reinicio). Sesión limpiada. Usa /empieza para iniciar de nuevo.',
+        );
+        return;
+      }
       await bot.sendMessage(chatId, '💤 No hay búsqueda activa para este chat.');
       return;
     }

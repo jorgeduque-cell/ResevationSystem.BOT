@@ -4,11 +4,11 @@
 // distributed 6-per-court across the 3 targets.
 // =========================================================
 
-import { AppConfig, BotExecutionResult, CourtInfo } from '../types';
+import { AppConfig, AccountConfig, BotExecutionResult, CourtInfo } from '../types';
 import { IdrdApiClient } from './IdrdApiClient';
 import { TokenManager } from './TokenManager';
 import { TelegramNotifier } from './TelegramNotifier';
-import { SoldierBot } from './SoldierBot';
+import { SoldierBot, SprintCoordinator } from './SoldierBot';
 import { CourtCatalog } from './CourtCatalog';
 import { AvailabilityEngine } from '../core/AvailabilityEngine';
 import { MissionPlanner } from '../core/MissionPlanner';
@@ -59,14 +59,30 @@ export class Commander {
    * invalid IDs to the user before committing to a search.
    */
   async validateCourts(inputs: CourtInput[]): Promise<CourtValidationResult> {
-    // Need at least one token to probe
-    const tokenMap = await this.tokenManager.refreshAllTokens(this.config.accounts);
-    if (tokenMap.size === 0) {
+    // Solo necesitamos UN token para sondear el catálogo. Deliberadamente NO
+    // logeamos las 18 cuentas aquí: ese pico de ~18 POST /login es justo lo que
+    // IDRD castiga con 429 (Too Many Requests) y, además, ralentiza/agota el
+    // sondeo de las canchas. Cada SoldierBot ya asegura su propio token al
+    // desplegarse (ensureToken, escalonado), así que basta con un único login
+    // (o el token cacheado) para esta validación. Probamos cuentas en orden y
+    // nos quedamos con la primera que entregue token, sin disparar la flota.
+    let probeAccount: AccountConfig | undefined;
+    let probeToken: string | undefined;
+    for (const account of this.config.accounts) {
+      try {
+        probeToken = await this.tokenManager.ensureToken(account);
+        probeAccount = account;
+        break;
+      } catch (err: any) {
+        logger.warn(
+          { account: account.index, err: err.message },
+          'No se pudo obtener token para sondear; probando siguiente cuenta',
+        );
+      }
+    }
+    if (!probeAccount || !probeToken) {
       throw new Error('No se pudo hacer login a ninguna cuenta para validar las canchas.');
     }
-
-    const probeAccount = this.config.accounts.find((a) => tokenMap.has(a.index))!;
-    const probeToken = tokenMap.get(probeAccount.index)!;
 
     const resolved = await this.catalog.resolveAll(inputs, probeAccount, probeToken);
 
@@ -165,8 +181,11 @@ export class Commander {
       this.isDryRun,
     );
 
+    // Sprint GLOBAL compartido: apenas UNA misión detecta que IDRD subió un
+    // espacio (la cascada cronológica empezó), TODAS pasan a sondeo sub-segundo.
+    const sprint = new SprintCoordinator();
     const botPromises = missions.map((mission) =>
-      soldierBot.execute(mission, signal),
+      soldierBot.execute(mission, signal, sprint),
     );
 
     const results = await Promise.allSettled(botPromises);

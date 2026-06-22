@@ -74,11 +74,26 @@ export class CourtCatalog {
       return info;
     } catch (err: any) {
       const status = err?.response?.status;
+      // 404 = la cancha realmente no existe en el catálogo → inválida.
+      if (status === 404) {
+        logger.warn({ courtId, status }, '⚠️ courtId no existe en el catálogo IDRD (404)');
+        return null;
+      }
+      // Cualquier otro fallo (timeout / 429 / 5xx / red) es TRANSITORIO: NO
+      // prueba que el ID sea inválido. No abortamos toda la búsqueda por un
+      // timeout puntual — damos la cancha por válida con un nombre de respaldo
+      // y dejamos que los SoldierBot la confirmen de verdad durante el sondeo.
+      // No la cacheamos, para que un intento posterior pueda re-validarla.
       logger.warn(
         { courtId, status, err: err.message },
-        '⚠️ courtId no válido o endpoint falló',
+        '⚠️ No se pudo validar la cancha (error transitorio); se asume válida',
       );
-      return null;
+      return {
+        courtId,
+        parkId: numericId,
+        parkName: userProvidedName || 'Parque IDRD',
+        courtName: userProvidedName || `Cancha ${courtId}`,
+      };
     }
   }
 

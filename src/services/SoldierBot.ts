@@ -4,7 +4,7 @@
 // Respeta señal de aborto y tiene circuit breaker
 // =========================================================
 
-import { Mission, BotExecutionResult, BotStatus } from '../types';
+import { Mission, BotExecutionResult, BotStatus, IdrdScheduleSlot, IdrdReservationResponse } from '../types';
 import { IdrdApiClient } from './IdrdApiClient';
 import { AvailabilityEngine } from '../core/AvailabilityEngine';
 import { TelegramNotifier } from './TelegramNotifier';
@@ -17,11 +17,96 @@ const MAX_CONSECUTIVE_ERRORS = 10;
 const CIRCUIT_BREAKER_PAUSE_MS = 60_000; // 60 seconds
 const LOGIN_STAGGER_MS = 200; // initial logins spaced by accountIndex * this
 
-// Re-búsqueda agresiva: tras una reserva el bot NO se detiene. IDRD libera el
-// slot por tiempo (p. ej. si no se completa el pago), así que seguimos sondeando
-// a ~1s para re-reservarlo apenas reaparezca — reacción muy por debajo de 10s.
-const REPOLL_AFTER_RESERVE_MIN_MS = 800;
-const REPOLL_AFTER_RESERVE_MAX_MS = 1500;
+// Re-búsqueda tras reservar: el bot NO se detiene. IDRD libera el slot por
+// tiempo (p. ej. si no se completa el pago), así que seguimos sondeando para
+// re-reservarlo apenas reaparezca. Cadencia MODERADA (~3-5s) para no disparar
+// 429 (Too Many Requests) desde una sola IP residencial; aun así la reacción
+// queda por debajo de 10s cuando el slot reaparece.
+const REPOLL_AFTER_RESERVE_MIN_MS = 3000;
+const REPOLL_AFTER_RESERVE_MAX_MS = 5000;
+
+// PERSISTENCIA del claim: cuando encontramos un slot, está libre AHORA. Si la
+// reserva falla por saturación (5xx/timeout/contención momentánea — IDRD ahogado
+// en el pico del lunes), reintentamos el POST RÁPIDO unas pocas veces antes de
+// volver a sondear, en vez de esperar varios segundos y perder el slot.
+const CLAIM_MAX_ATTEMPTS = 4;
+const CLAIM_RETRY_MIN_MS = 150;
+const CLAIM_RETRY_MAX_MS = 400;
+
+// Cadencia REACTIVA por NIVELES (todas las misiones comparten el coordinador):
+//  - BURST: una misión ACABA de ver subir un slot (cascada en curso, el día
+//    cayó hace segundos) → sub-segundo para cazarlo al instante.
+//  - RELEASE: la ventana de liberación del lunes sigue ABIERTA (los slots
+//    suben goteando durante ~4h, día por día) → sondeo rápido SOSTENIBLE; NO
+//    volvemos a la cadencia lenta mientras la cascada siga viva. Cada nuevo
+//    movimiento RENUEVA la ventana.
+//  - IDLE: nada se mueve (antes de las 9AM o ya terminó la cascada) → lento,
+//    barato, sin machacar la IP.
+// Ajustar los rangos con el resultado del recon de rate-limit.
+const BURST_POLL_MIN_MS = 350;
+const BURST_POLL_MAX_MS = 800;
+const RELEASE_POLL_MIN_MS = 1000;
+const RELEASE_POLL_MAX_MS = 1800;
+const IDLE_POLL_MIN_MS = 3000;
+const IDLE_POLL_MAX_MS = 5000;
+// "Acaba de caer un slot": hubo movimiento en los últimos N ms → modo BURST.
+const FRESH_MOVEMENT_MS = 20_000;
+// La ventana RELEASE se mantiene abierta hasta este tiempo SIN ningún
+// movimiento. Cubre las pausas entre día y día de la cascada (~4h totales);
+// solo decae a IDLE cuando la cascada lleva rato totalmente quieta.
+const RELEASE_WINDOW_MS = 30 * 60_000;
+
+/**
+ * Firma del estado reservable de una fecha objetivo. Si IDRD sube, libera o
+ * cambia cualquier slot de esa fecha, la firma cambia — esa es la señal de
+ * "movimiento" que dispara el sprint reactivo. Solo miramos la fecha objetivo
+ * del bot (las otras fechas las vigilan los demás bots).
+ */
+function scheduleSignature(slots: IdrdScheduleSlot[], targetDate: string): string {
+  return slots
+    .filter((s) => s.start?.startsWith(targetDate))
+    .map((s) => `${s.start}|${s.end}|${s.can}`)
+    .sort()
+    .join(',');
+}
+
+/**
+ * Coordinador de SPRINT compartido por TODAS las misiones. IDRD sube los
+ * horarios en orden CRONOLÓGICO (primero martes, luego miércoles, ...). Apenas
+ * UNA misión detecta que subió/cambió un espacio, TODAS deben pasar a sondeo
+ * sub-segundo: el resto de días cae en cascada en segundos y todos los usuarios
+ * ya están recargando. Esta es la única fuente de verdad del "hasta cuándo
+ * sprintar", compartida entre los 18 SoldierBot.
+ */
+export class SprintCoordinator {
+  private lastMovementAt = 0;
+  private releaseUntil = 0;
+
+  /**
+   * Una misión detectó que IDRD subió/cambió un espacio. Marca el instante
+   * (para el BURST sub-segundo) y EXTIENDE la ventana de liberación: mientras
+   * sigan apareciendo slots (cascada del lunes), seguimos en modo rápido. La
+   * ventana solo decae tras `releaseWindowMs` sin ningún movimiento.
+   */
+  noteMovement(releaseWindowMs: number): void {
+    const now = Date.now();
+    this.lastMovementAt = now;
+    this.releaseUntil = now + releaseWindowMs;
+  }
+
+  /**
+   * Nivel de cadencia actual:
+   *  - 'burst'   → hubo movimiento hace < freshMs (un día acaba de caer)
+   *  - 'release' → la ventana de liberación sigue abierta (cascada viva)
+   *  - 'idle'    → todo quieto
+   */
+  tier(freshMs: number): 'burst' | 'release' | 'idle' {
+    const now = Date.now();
+    if (now - this.lastMovementAt < freshMs) return 'burst';
+    if (now < this.releaseUntil) return 'release';
+    return 'idle';
+  }
+}
 
 export class SoldierBot {
   private apiClient: IdrdApiClient;
@@ -54,6 +139,7 @@ export class SoldierBot {
   async execute(
     mission: Mission,
     signal?: AbortSignal,
+    sprint: SprintCoordinator = new SprintCoordinator(),
   ): Promise<BotExecutionResult> {
     const log = createBotLogger(mission.missionId, `${mission.court.parkName}/${mission.court.courtName}`);
     const startedAt = new Date().toISOString();
@@ -64,6 +150,10 @@ export class SoldierBot {
     let paymentLink: string | undefined;
     const paymentLinks: string[] = [];
     let errorMsg: string | undefined;
+    // Cadencia reactiva: firma del último horario visto por ESTA misión (la
+    // detección de movimiento es por-fecha). El "hasta cuándo sprintar" es
+    // GLOBAL (lo comparte el SprintCoordinator entre las 18 misiones).
+    let lastSignature = '';
 
     log.info(
       `🪖 ${mission.missionId} ACTIVADO - ${mission.account.name} → ${mission.court.parkName}/${mission.court.courtName} (ID ${mission.targetCourtId}) fecha ${mission.targetDate}`
@@ -133,6 +223,21 @@ export class SoldierBot {
           );
         }
 
+        // === Detección de MOVIMIENTO → SPRINT GLOBAL (cadencia reactiva) ===
+        // Si la firma del horario de ESTA fecha cambió respecto al sondeo
+        // anterior, IDRD acaba de subir/cambiar slots. Como sube en cascada
+        // cronológica, encendemos el sprint GLOBAL: TODAS las misiones pasan a
+        // sub-segundo para cazar los días que están por caer en los segundos
+        // siguientes, no solo la de esta fecha.
+        const signature = scheduleSignature(schedules, mission.targetDate);
+        if (lastSignature !== '' && signature !== lastSignature) {
+          sprint.noteMovement(RELEASE_WINDOW_MS);
+          log.info(
+            `👀 ¡Movimiento en el horario de ${mission.targetDate}! → modo RÁPIDO global (cascada en curso; ventana renovada ${RELEASE_WINDOW_MS / 60000}min)`,
+          );
+        }
+        lastSignature = signature;
+
         // 2. Pasar al AvailabilityEngine (Tetris)
         // El endpoint ya retorna solo la cancha objetivo — no hace falta filtrar
         const result = this.availabilityEngine.findSlot(schedules, mission.targetDate);
@@ -140,14 +245,23 @@ export class SoldierBot {
         if (!result.found) {
           // Log diagnosis every 10 attempts to keep logs readable
           if (slotsChecked === 1 || slotsChecked % 10 === 0) {
-            const mode = reservationCount > 0 ? '🔁 re-búsqueda agresiva' : 'búsqueda';
+            const mode = reservationCount > 0 ? '🔁 re-búsqueda activa' : 'búsqueda';
             log.info(
               `Intento #${slotsChecked} sin hueco (${mode}, ${reservationCount} reservas previas) → ${result.debugInfo}`,
             );
           }
-          // Cadencia de sondeo ~1s: si IDRD ya liberó (o libera) el slot, lo
-          // detectamos y re-reservamos en segundos, nunca cerca de los 10s.
-          await sleepWithJitter(600, 1200);
+          // Cadencia REACTIVA por nivel GLOBAL: BURST (un slot acaba de caer),
+          // RELEASE (cascada del lunes aún abierta — NO bajamos a lento), o IDLE
+          // (todo quieto). Apenas sube el primer espacio, TODAS las misiones se
+          // mantienen rápidas durante toda la cascada, no solo 90s.
+          const tier = sprint.tier(FRESH_MOVEMENT_MS);
+          const [pollMin, pollMax] =
+            tier === 'burst'
+              ? [BURST_POLL_MIN_MS, BURST_POLL_MAX_MS]
+              : tier === 'release'
+                ? [RELEASE_POLL_MIN_MS, RELEASE_POLL_MAX_MS]
+                : [IDLE_POLL_MIN_MS, IDLE_POLL_MAX_MS];
+          await sleepWithJitter(pollMin, pollMax);
           continue;
         }
 
@@ -172,18 +286,36 @@ export class SoldierBot {
         // los lunes 9 AM — perdíamos segundos a manos de usuarios humanos
         // mientras esperábamos un token "fresco" innecesario. Si el token
         // realmente expira, el catch de 401 más abajo lo refresca y reintenta.
-        log.info('Creando reserva...');
-        const reservation = await this.apiClient.createReservation(
-          mission.court.parkId,
-          mission.targetDate,
-          result.startHourFormatted!,
-          result.endHourFormatted!,
-          mission.account.document,
-          mission.token,
-        );
+        // PERSISTENCIA: el slot está libre AHORA. Reintentamos el claim rápido
+        // ante 5xx/timeout/contención (IDRD ahogado en el pico) antes de rendirnos.
+        log.info('Creando reserva (con persistencia)...');
+        let reservation: IdrdReservationResponse | null = null;
+        for (let attempt = 1; attempt <= CLAIM_MAX_ATTEMPTS; attempt++) {
+          try {
+            const r = await this.apiClient.createReservation(
+              mission.court.parkId,
+              mission.targetDate,
+              result.startHourFormatted!,
+              result.endHourFormatted!,
+              mission.account.document,
+              mission.token,
+            );
+            if (r.code === 200) {
+              reservation = r;
+              break;
+            }
+            log.warn({ code: r.code, attempt }, 'Reserva != 200; reintentando claim rápido...');
+          } catch (claimErr: any) {
+            const status = claimErr?.response?.status;
+            // Un 401 lo maneja el catch externo (refresca token y reintenta).
+            if (status === 401) throw claimErr;
+            log.warn({ attempt, status, err: claimErr.message }, 'Claim falló; reintentando rápido...');
+          }
+          if (attempt < CLAIM_MAX_ATTEMPTS) await sleepWithJitter(CLAIM_RETRY_MIN_MS, CLAIM_RETRY_MAX_MS);
+        }
 
         // 3b. Verificar respuesta
-        if (reservation.code === 200 || (reservation as any).code === 200) {
+        if (reservation) {
           log.info('✅ Reserva exitosa! Generando link de pago...');
 
           // 3c. Generar link PSE con reintentos.
@@ -246,17 +378,20 @@ export class SoldierBot {
           paymentLinks.push(paymentLink!);
           log.info(
             `🏆 ${mission.missionId} RESERVA #${reservationCount} EXITOSA (${result.startHourFormatted} - ${result.endHourFormatted}). ` +
-              `Re-búsqueda AGRESIVA: NO paramos. Si IDRD libera el slot por tiempo, lo re-reservamos en segundos.`,
+              `Re-búsqueda activa: NO paramos. Si IDRD libera el slot por tiempo, lo re-reservamos en segundos.`,
           );
           // El bot NUNCA se detiene tras reservar. IDRD mantiene el slot bloqueado
           // un rato y luego lo libera por tiempo (si no se completa el pago).
-          // Seguimos sondeando agresivamente (~1s) para volver a tomarlo apenas
-          // reaparezca en getSchedules — reacción muy por debajo de los 10s.
+          // Seguimos sondeando a cadencia moderada (~3-5s) para volver a tomarlo
+          // apenas reaparezca en getSchedules — reacción por debajo de los 10s.
           await sleepWithJitter(REPOLL_AFTER_RESERVE_MIN_MS, REPOLL_AFTER_RESERVE_MAX_MS);
           continue;
         } else {
-          log.warn({ code: reservation.code }, 'Reserva devolvió código != 200, reintentando...');
-          await sleepWithJitter(800, 1500);
+          // No concretamos el claim tras los reintentos rápidos (slot tomado o
+          // IDRD ahogado). Volvemos a sondear de inmediato: si el slot sigue o
+          // queda libre, lo reintentamos. No lo contamos como error de ciclo.
+          log.warn(`No se concretó la reserva tras ${CLAIM_MAX_ATTEMPTS} intentos rápidos; vuelvo a sondear.`);
+          await sleepWithJitter(BURST_POLL_MIN_MS, BURST_POLL_MAX_MS);
           continue;
         }
       } catch (error: any) {
