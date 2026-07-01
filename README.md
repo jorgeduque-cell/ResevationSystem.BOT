@@ -6,19 +6,21 @@ Bot autónomo que reserva canchas del **IDRD** (Bogotá) de forma automática, c
 
 ## ¿Por qué existe? (el problema)
 
-El IDRD libera los cupos de las canchas los **lunes en la mañana**, y no a una hora exacta: los horarios "van subiendo" de forma escalonada durante varias horas, en orden cronológico (primero martes, luego miércoles, etc.). En ese momento **toda Bogotá** entra a pelear los mismos cupos, el servidor se satura y ganarlos a mano —refrescando la página— es prácticamente imposible.
+Una empresa que organiza **torneos y ligas deportivas en Bogotá** necesita asegurar de forma recurrente muchas horas de cancha para armar su calendario de competencias. La reserva de escenarios del IDRD se abre los **lunes en la mañana** y no a una hora exacta: la disponibilidad "va subiendo" de forma escalonada durante varias horas, en orden cronológico (primero martes, luego miércoles, etc.), y cada reserva debe hacerse con al menos **24 h de anticipación** dentro de una ventana horaria concreta.
 
-Este bot automatiza esa carrera: detecta el instante en que un cupo se libera y dispara la reserva **sin reacción humana**, con el token de sesión ya listo. Esa es su ventaja estructural sobre una persona haciendo clic.
+Gestionar eso a mano —vigilando la plataforma, cuadrando varias canchas y días, y sin dejar caer ningún cupo que el calendario del torneo necesita— es operativamente inviable y propenso a errores para una empresa que depende de una programación consistente. Este sistema existe para **centralizar y automatizar ese flujo de gestión de reservas**: que el equipo de operaciones pueda planear el calendario de torneos con anticipación y confiabilidad, en lugar de depender de que alguien esté pendiente de la plataforma en el momento justo.
 
 ---
 
 ## ¿Qué hace?
 
-- Controla **18 cuentas** IDRD, cada una como una "misión" independiente.
-- Cada misión = **1 cuenta + 1 cancha + 1 día objetivo**, buscando en la ventana **8:00 PM – 10:00 PM** con al menos **24 h de anticipación**.
-- Reparte las 18 cuentas en **3 canchas × 6 días** (rotación Mar–Lun, sin domingo).
-- Al encontrar un cupo: **crea la reserva**, genera el **link de pago PSE** y lo **envía por Telegram**.
-- **No se detiene** al reservar: si el IDRD libera el cupo por falta de pago, lo vuelve a tomar en segundos (re-búsqueda activa).
+Gestiona a escala las reservas de canchas que la empresa necesita para su programación de torneos:
+
+- Administra **18 cuentas** IDRD, cada una como una "misión" independiente.
+- Cada misión = **1 cuenta + 1 cancha + 1 día objetivo**, dentro de la ventana **8:00 PM – 10:00 PM** y con al menos **24 h de anticipación**.
+- Reparte las 18 cuentas en **3 canchas × 6 días** (rotación Mar–Lun, sin domingo), cubriendo la parrilla de escenarios que requiere el calendario del torneo.
+- Cuando hay disponibilidad: **crea la reserva**, genera el **link de pago PSE** y lo **envía por Telegram** al equipo de operaciones.
+- **No se detiene** tras reservar: si un cupo se libera por falta de pago, lo vuelve a asegurar en segundos (re-búsqueda activa), para que la programación no se caiga.
 
 ---
 
